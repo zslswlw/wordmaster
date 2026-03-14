@@ -29,7 +29,7 @@ def start_study(
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
     
-    if not is_review:
+    if not is_review and not is_enhance:
         if group.status == "completed":
             raise HTTPException(status_code=400, detail="Group already completed")
         group.status = "learning"
@@ -43,10 +43,13 @@ def start_study(
     
     word_ids = [w.id for w in words]
     
-    # 只查询新学模式的记录（不包括强化听写和复习）
+    # 根据模式选择查询的学习类型
+    query_study_type = "review" if is_review else ("enhance" if is_enhance else "new")
+    
+    # 查询对应学习类型的记录
     existing_records = db.query(StudyRecord).filter(
         StudyRecord.group_id == group_id,
-        StudyRecord.study_type == "new"
+        StudyRecord.study_type == query_study_type
     ).all()
     
     max_round = 0
@@ -61,8 +64,30 @@ def start_study(
     
     if is_review:
         # 复习模式：只复习错误的单词
-        current_round = max_round + 1
-        study_word_ids = list(wrong_word_ids) if wrong_word_ids else word_ids
+        if wrong_word_ids:
+            # 有错误，继续下一轮只听写错误的
+            current_round = max_round + 1
+            study_word_ids = list(wrong_word_ids)
+        elif existing_records and max_round > 0:
+            # 有记录且上轮全部正确，检查是否已完成所有单词的复习
+            # 获取已正确复习的单词ID（任意轮次正确即可）
+            correct_word_ids = set()
+            for record in existing_records:
+                if record.correct:
+                    correct_word_ids.add(record.word_id)
+            
+            # 如果所有单词都已正确复习，完成复习
+            if len(correct_word_ids) >= len(word_ids):
+                current_round = max_round
+                study_word_ids = []
+            else:
+                # 还有单词未正确复习，继续复习所有单词
+                current_round = max_round + 1
+                study_word_ids = word_ids
+        else:
+            # 第一轮复习，听写所有单词
+            current_round = 1
+            study_word_ids = word_ids
     elif is_enhance:
         # 强化学习模式：听写所有单词（跟新学一样的逻辑，有错误继续下一轮）
         # 查询强化听写模式的记录
@@ -207,6 +232,16 @@ def complete_round(
         
         if wrong_count == 0:
             # 当前轮次全部正确，复习完成
+            # 更新复习计划状态为已完成
+            if plan_id:
+                review_plan = db.query(ReviewPlan).filter(
+                    ReviewPlan.id == plan_id,
+                    ReviewPlan.group_id == group_id
+                ).first()
+                if review_plan:
+                    review_plan.status = "completed"
+                    review_plan.completed_at = datetime.utcnow()
+                    db.commit()
             return {"message": "Review completed successfully", "status": "completed", "next_step": "completed"}
         else:
             # 复习还有错误，继续下一轮复习（像新学一样）
@@ -237,7 +272,9 @@ def complete_round(
                 plan = ReviewPlan(
                     group_id=group_id,
                     review_date=review_date,
-                    review_round=round_num
+                    original_date=review_date,
+                    review_round=round_num,
+                    postponed_days=0
                 )
                 db.add(plan)
             
@@ -342,13 +379,8 @@ def get_round_stats(
     actual_current_round = current_round or max(rounds.keys())
     current_round_data = rounds.get(actual_current_round, {"correct": 0, "wrong": 0, "total": 0})
     
-    # 计算本轮单词数：第一轮为总单词数，后续轮次为上一轮的错误数
-    if actual_current_round == 1:
-        current_round_total = total_words
-    else:
-        prev_round = actual_current_round - 1
-        prev_round_data = rounds.get(prev_round, {"wrong": 0})
-        current_round_total = prev_round_data["wrong"]
+    # 计算本轮单词数：使用实际统计的单词数（正确+错误）
+    current_round_total = current_round_data.get("correct", 0) + current_round_data.get("wrong", 0)
     
     return {
         "current_round": actual_current_round,

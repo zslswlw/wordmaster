@@ -76,9 +76,12 @@ class ReviewPlan(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(Integer, ForeignKey("study_groups.id"), nullable=False)
-    review_date = Column(Date, nullable=False)
+    review_date = Column(Date, nullable=False)  # 当前计划复习日期（可能已延期）
+    original_date = Column(Date, nullable=False)  # 原始计划复习日期
     review_round = Column(Integer, nullable=False)
-    status = Column(String, default="pending")
+    status = Column(String, default="pending")  # pending, completed
+    postponed_days = Column(Integer, default=0)  # 延期天数
+    completed_at = Column(DateTime, nullable=True)
 
 
 Base.metadata.create_all(bind=engine)

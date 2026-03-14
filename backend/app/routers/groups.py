@@ -19,9 +19,45 @@ def get_groups(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    return db.query(StudyGroup).filter(
+    groups = db.query(StudyGroup).filter(
         StudyGroup.user_id == current_user.id
     ).order_by(StudyGroup.created_at.desc()).all()
+    
+    today = date.today()
+    result = []
+    for group in groups:
+        group_dict = {
+            "id": group.id,
+            "user_id": group.user_id,
+            "bank_id": group.bank_id,
+            "name": group.name,
+            "start_seq": group.start_seq,
+            "end_seq": group.end_seq,
+            "status": group.status,
+            "created_at": group.created_at,
+            "completed_at": group.completed_at,
+            "today_review_status": None
+        }
+        
+        # 只有已完成的学习组才检查复习状态
+        if group.status == "completed":
+            # 查询今日的复习计划
+            today_plan = db.query(ReviewPlan).filter(
+                ReviewPlan.group_id == group.id,
+                ReviewPlan.review_date == today
+            ).first()
+            
+            if today_plan:
+                if today_plan.status == "completed":
+                    group_dict["today_review_status"] = "completed"
+                else:
+                    group_dict["today_review_status"] = "pending"
+            else:
+                group_dict["today_review_status"] = "none"
+        
+        result.append(group_dict)
+    
+    return result
 
 
 @router.post("", response_model=StudyGroupResponse)

@@ -44,6 +44,19 @@
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
+        <el-table-column label="今日复习" width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.today_review_status === 'completed'" type="success">
+              已完成
+            </el-tag>
+            <el-tag v-else-if="row.today_review_status === 'pending'" type="warning">
+              待复习
+            </el-tag>
+            <el-tag v-else type="info">
+              无计划
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button 
@@ -56,13 +69,31 @@
               学习
             </el-button>
             <el-button 
-              v-else
+              v-else-if="row.today_review_status === 'pending'"
               type="success" 
               size="small" 
               @click="goToGroupReview(row.id)"
             >
               <el-icon><RefreshRight /></el-icon>
               复习
+            </el-button>
+            <el-button 
+              v-else-if="row.today_review_status === 'completed'"
+              type="info" 
+              size="small" 
+              disabled
+            >
+              <el-icon><RefreshRight /></el-icon>
+              今日已复习
+            </el-button>
+            <el-button 
+              v-else
+              type="info" 
+              size="small" 
+              disabled
+            >
+              <el-icon><RefreshRight /></el-icon>
+              暂无复习
             </el-button>
             <el-button 
               type="danger" 
@@ -168,6 +199,7 @@ interface Group {
   status: string
   created_at: string
   completed_at: string | null
+  today_review_status: 'completed' | 'pending' | 'none' | null
 }
 
 interface Bank {
@@ -206,11 +238,19 @@ const maxSeq = computed(() => {
   return selectedBank.value?.word_count || 9999
 })
 
-watch(() => form.bank_id, (newVal) => {
-  if (newVal) {
+watch(() => form.bank_id, (newVal, oldVal) => {
+  if (newVal && oldVal) {
+    // 只有切换词库时才调整，且只在当前值超出新词库范围时调整
     const bank = banks.value.find(b => b.id === newVal)
     if (bank) {
-      form.end_seq = Math.min(50, bank.word_count)
+      // 如果当前结束序号超出新词库范围，则调整到词库最大值
+      if (form.end_seq > bank.word_count) {
+        form.end_seq = bank.word_count
+      }
+      // 如果起始序号超出新词库范围，则调整到1
+      if (form.start_seq > bank.word_count) {
+        form.start_seq = 1
+      }
     }
   }
 })

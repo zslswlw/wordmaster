@@ -34,22 +34,31 @@
       </div>
 
       <div class="input-section">
-        <div class="input-area">
-          <el-input
-            ref="inputRef"
-            v-model="userInput"
-            placeholder="请输入英文单词"
-            size="large"
-            @keyup.enter="handleSubmit"
-            :disabled="answerSubmitted"
-            clearable
-          />
+        <!-- 打字效果显示区域 -->
+        <div v-if="!answerSubmitted" class="typing-display" @click="focusInput">
+          <span class="typed-text">{{ userInput }}</span>
+          <span class="cursor" :class="{ 'cursor-blink': !answerSubmitted }">|</span>
+        </div>
+        <!-- 隐藏的实际输入框 -->
+        <input
+          ref="inputRef"
+          v-model="userInput"
+          type="text"
+          class="hidden-input"
+          @keyup.enter="handleSubmit"
+          :disabled="answerSubmitted"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+        <!-- 提交按钮 -->
+        <div v-if="!answerSubmitted" class="submit-area">
           <el-button 
             type="primary" 
             size="large" 
             @click="handleSubmit"
             :loading="submitting"
-            :disabled="answerSubmitted || !userInput.trim()"
+            :disabled="!userInput.trim()"
           >
             提交
           </el-button>
@@ -63,8 +72,19 @@
             <el-icon :size="40" v-else><CircleClose /></el-icon>
             <span class="result-text">{{ lastResult?.correct ? '回答正确!' : '回答错误' }}</span>
           </div>
-          <div v-if="!lastResult?.correct" class="correct-answer">
-            正确答案: <strong>{{ lastResult?.correct_answer }}</strong>
+          
+          <!-- 答案对比区域 -->
+          <div class="answer-comparison">
+            <div class="answer-row">
+              <span class="answer-label">你的答案</span>
+              <span :class="['answer-value', 'user-answer', lastResult?.correct ? 'correct-text' : 'wrong-text']">
+                {{ lastResult?.user_answer || '-' }}
+              </span>
+            </div>
+            <div class="answer-row">
+              <span class="answer-label">正确答案</span>
+              <span class="answer-value correct-text">{{ lastResult?.correct_answer }}</span>
+            </div>
           </div>
         </div>
         <el-button type="primary" size="large" @click="handleNext" autofocus class="next-btn">
@@ -143,11 +163,18 @@ const route = useRoute()
 const groupId = ref<number>(0)
 const isPlaying = ref(false)
 
-// 从路由参数中获取groupId
+// 从路由参数或查询参数中获取groupId
 const initGroupId = () => {
+  // 优先从路由参数获取
   const id = route.params.id
   if (id && !isNaN(Number(id))) {
     groupId.value = Number(id)
+    return true
+  }
+  // 从查询参数获取（复习模式）
+  const queryId = route.query.groupId
+  if (queryId && !isNaN(Number(queryId))) {
+    groupId.value = Number(queryId)
     return true
   }
   return false
@@ -220,27 +247,51 @@ const initStudy = async () => {
     router.push('/groups')
     return
   }
-  
+
   try {
-    // Check if this is a review session
-    const reviewPlanId = localStorage.getItem('reviewPlanId')
-    const isReview = !!reviewPlanId
-    if (reviewPlanId) {
+    // Check if this is a review session from query params (学习组管理界面跳转)
+    const queryPlanId = route.query.planId
+    const queryIsReview = route.query.isReview === 'true'
+    let isReview = false
+
+    if (queryPlanId && queryIsReview) {
+      // 从学习组管理界面跳转的复习模式
       studyType.value = 'review'
-      planId.value = Number(reviewPlanId)
-      localStorage.removeItem('reviewPlanId')
+      planId.value = Number(queryPlanId)
+      isReview = true
+    } else {
+      // Check if this is a review session from localStorage (复习计划界面跳转)
+      const reviewPlanId = localStorage.getItem('reviewPlanId')
+      isReview = !!reviewPlanId
+      if (reviewPlanId) {
+        studyType.value = 'review'
+        planId.value = Number(reviewPlanId)
+        localStorage.removeItem('reviewPlanId')
+      }
     }
-    
+
     // 开始学习计划，获取单词ID列表
     const response = await studyAPI.startStudy(groupId.value, isReview, false)
     wordIds.value = response.data.word_ids
     currentRound.value = response.data.current_round
-    
-    // 获取所有单词详情
-    const wordPromises = wordIds.value.map(id => studyAPI.getWord(id))
-    const wordResponses = await Promise.all(wordPromises)
-    words.value = wordResponses.map(r => r.data)
-    
+
+    // 串行获取单词详情，避免并发请求过多导致超时
+    words.value = []
+    for (const id of wordIds.value) {
+      try {
+        const wordResponse = await studyAPI.getWord(id)
+        words.value.push(wordResponse.data)
+      } catch (error) {
+        console.error(`获取单词 ${id} 详情失败`, error)
+      }
+    }
+
+    if (words.value.length === 0) {
+      ElMessage.error('没有可学习的单词')
+      router.push('/groups')
+      return
+    }
+
     // Play first word pronunciation
     setTimeout(() => {
       playPronunciation()
@@ -275,10 +326,9 @@ const playPronunciation = () => {
 
 const handleSubmit = async () => {
   if (!userInput.value.trim()) return
-  
-  answerSubmitted.value = true
+
   submitting.value = true
-  
+
   try {
     const response = await studyAPI.checkAnswer({
       group_id: groupId.value,
@@ -288,19 +338,22 @@ const handleSubmit = async () => {
       study_type: studyType.value,
       plan_id: planId.value || undefined
     })
-    
+
+    // 先设置结果，再显示结果区域，避免闪现错误提示
     lastResult.value = {
       correct: response.data.correct,
-      correct_answer: response.data.correct_answer
+      correct_answer: response.data.correct_answer,
+      user_answer: userInput.value.trim()
     }
-    
+    answerSubmitted.value = true
+
     // Play pronunciation of correct answer
     if (lastResult.value.correct) {
       setTimeout(() => {
         playPronunciation()
       }, 1000)
     }
-    
+
   } catch (error) {
     ElMessage.error('提交失败')
   } finally {
@@ -346,7 +399,8 @@ const focusInput = () => {
 
 const checkRoundResult = async () => {
   try {
-    const response = await studyAPI.getRoundStats(groupId.value, currentRound.value)
+    // 根据当前学习类型获取统计，复习模式使用 'review'，新学模式使用 'new'
+    const response = await studyAPI.getRoundStats(groupId.value, currentRound.value, studyType.value)
     const data = response.data
     
     // 使用后端返回的当前轮次统计
@@ -359,12 +413,22 @@ const checkRoundResult = async () => {
     }
     
     if (currentStats.wrong === 0) {
-      // All correct, move to enhance mode
-      roundResultTitle.value = '本轮完成!'
-      roundMessage.value = `恭喜你，本轮 ${currentStats.total} 个单词全部答对！`
-      roundResultIcon.value = 'Check'
-      roundResultIconClass.value = 'correct-icon'
-      nextStep.value = 'enhance'
+      // All correct
+      if (studyType.value === 'review') {
+        // 复习模式：直接完成，没有强化学习环节
+        roundResultTitle.value = '复习完成!'
+        roundMessage.value = `恭喜你，本轮 ${currentStats.total} 个单词全部答对！复习完成！`
+        roundResultIcon.value = 'Check'
+        roundResultIconClass.value = 'correct-icon'
+        nextStep.value = 'finish'
+      } else {
+        // 新学模式：进入强化学习环节
+        roundResultTitle.value = '本轮完成!'
+        roundMessage.value = `恭喜你，本轮 ${currentStats.total} 个单词全部答对！`
+        roundResultIcon.value = 'Check'
+        roundResultIconClass.value = 'correct-icon'
+        nextStep.value = 'enhance'
+      }
     } else {
       // Some wrong, show stats
       roundResultTitle.value = '本轮结果'
@@ -442,16 +506,29 @@ const continueStudy = async () => {
     }
   } else {
     try {
-      // 新学模式：从后端获取上一轮错误的单词列表（已随机打乱）
-      const response = await studyAPI.startStudy(groupId.value, false, false)
+      // 根据学习类型判断是否是复习模式
+      const isReview = studyType.value === 'review'
+      // 新学/复习模式：从后端获取上一轮错误的单词列表（已随机打乱）
+      const response = await studyAPI.startStudy(groupId.value, isReview, false)
       wordIds.value = response.data.word_ids
       currentRound.value = response.data.current_round
-      
-      // 获取所有单词详情
-      const wordPromises = wordIds.value.map(id => studyAPI.getWord(id))
-      const wordResponses = await Promise.all(wordPromises)
-      words.value = wordResponses.map(r => r.data)
-      
+
+      // 串行获取单词详情，避免并发请求过多导致超时
+      words.value = []
+      for (const id of wordIds.value) {
+        try {
+          const wordResponse = await studyAPI.getWord(id)
+          words.value.push(wordResponse.data)
+        } catch (error) {
+          console.error(`获取单词 ${id} 详情失败`, error)
+        }
+      }
+
+      if (words.value.length === 0) {
+        ElMessage.error('没有可学习的单词')
+        return
+      }
+
       currentIndex.value = 0
       focusInput()
       setTimeout(() => {
@@ -467,18 +544,29 @@ const startEnhance = async () => {
   showRoundResult.value = false
   enhanceMode.value = true
   studyType.value = 'enhance'
-  
+
   try {
     // 从后端获取所有单词（已随机打乱）
     const response = await studyAPI.startStudy(groupId.value, false, true)
     enhanceWordIds.value = response.data.word_ids
     currentRound.value = response.data.current_round
-    
-    // 获取所有单词详情
-    const wordPromises = enhanceWordIds.value.map(id => studyAPI.getWord(id))
-    const wordResponses = await Promise.all(wordPromises)
-    enhanceWords.value = wordResponses.map(r => r.data)
-    
+
+    // 串行获取单词详情，避免并发请求过多导致超时
+    enhanceWords.value = []
+    for (const id of enhanceWordIds.value) {
+      try {
+        const wordResponse = await studyAPI.getWord(id)
+        enhanceWords.value.push(wordResponse.data)
+      } catch (error) {
+        console.error(`获取单词 ${id} 详情失败`, error)
+      }
+    }
+
+    if (enhanceWords.value.length === 0) {
+      ElMessage.error('没有可学习的单词')
+      return
+    }
+
     enhanceIndex.value = 0
     focusInput()
     setTimeout(() => {
@@ -495,7 +583,7 @@ const finishStudy = async () => {
   try {
     await studyAPI.completeStudy(groupId.value, enhanceMode.value, studyType.value, planId.value)
     ElMessage.success('学习完成！')
-    router.push('/dashboard')
+    router.push('/groups')
   } catch (error) {
     ElMessage.error('保存学习记录失败')
   }
@@ -582,10 +670,10 @@ watch(userInput, () => {
 }
 
 .progress-bar {
-  width: 200px;
-  height: 6px;
+  width: 300px;
+  height: 4px;
   background-color: #e4e7ed;
-  border-radius: 3px;
+  border-radius: 2px;
   margin: 0 auto 8px;
   overflow: hidden;
 }
@@ -676,21 +764,75 @@ watch(userInput, () => {
 
 .input-section {
   margin-top: 30px;
+  text-align: center;
 }
 
-.input-area {
+/* 打字效果显示区域 */
+.typing-display {
+  min-height: 60px;
+  padding: 12px 20px;
+  margin-bottom: 16px;
+  background-color: #f5f7fa;
+  border: 2px solid #e4e7ed;
+  border-radius: 8px;
+  cursor: text;
   display: flex;
-  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Courier New', monospace;
+  font-size: 28px;
+  font-weight: 600;
+  color: #303133;
+  letter-spacing: 2px;
+  transition: all 0.3s ease;
 }
 
-.input-area .el-input {
-  flex: 1;
+.typing-display:hover {
+  border-color: #c0c4cc;
+  background-color: #f9fafc;
 }
 
-.input-area .el-input :deep(.el-input__inner) {
-  font-size: 18px;
-  padding: 12px 16px;
-  height: 50px;
+.typing-display:focus-within {
+  border-color: #409EFF;
+  background-color: #fff;
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.1);
+}
+
+.typed-text {
+  min-height: 32px;
+}
+
+/* 光标样式 */
+.cursor {
+  color: #409EFF;
+  font-weight: 300;
+  margin-left: 2px;
+}
+
+.cursor-blink {
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+/* 隐藏的实际输入框 */
+.hidden-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+.submit-area {
+  margin-top: 16px;
 }
 
 .result-area {
@@ -747,15 +889,55 @@ watch(userInput, () => {
   color: #f56c6c;
 }
 
-.correct-answer {
-  font-size: 16px;
-  color: #606266;
-  margin-top: 8px;
+/* 答案对比区域样式 */
+.answer-comparison {
+  margin-top: 20px;
+  padding: 20px 40px;
+  background-color: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  display: inline-block;
 }
 
-.correct-answer strong {
-  color: #f56c6c;
+.answer-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 20px;
+  margin: 12px 0;
   font-size: 18px;
+}
+
+.answer-label {
+  min-width: 80px;
+  text-align: left;
+  color: #909399;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.answer-value {
+  min-width: 150px;
+  text-align: left;
+  font-family: 'Courier New', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  padding: 8px 16px;
+  border-radius: 6px;
+  background-color: #f5f7fa;
+  border: 2px solid transparent;
+  letter-spacing: 1px;
+}
+
+.answer-value.user-answer {
+  border-color: currentColor;
+}
+
+.correct-text {
+  color: #67c23a;
+}
+
+.wrong-text {
+  color: #f56c6c;
 }
 
 .next-btn {

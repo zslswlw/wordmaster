@@ -67,8 +67,11 @@ def export_data(
             "plans": [
                 {
                     "review_date": p.review_date.isoformat() if p.review_date else None,
+                    "original_date": p.original_date.isoformat() if p.original_date else None,
                     "review_round": p.review_round,
-                    "status": p.status
+                    "status": p.status,
+                    "postponed_days": p.postponed_days,
+                    "completed_at": p.completed_at.isoformat() if p.completed_at else None
                 }
                 for p in plans
             ]
@@ -148,11 +151,18 @@ async def import_data(
             db.add(record)
         
         for p in group_info.get("plans", []):
+            # 兼容旧数据：如果没有original_date，使用review_date
+            review_date = date.fromisoformat(p["review_date"]) if p.get("review_date") else date.today()
+            original_date = date.fromisoformat(p["original_date"]) if p.get("original_date") else review_date
+            
             plan = ReviewPlan(
                 group_id=group.id,
-                review_date=date.fromisoformat(p["review_date"]) if p.get("review_date") else date.today(),
+                review_date=review_date,
+                original_date=original_date,
                 review_round=p["review_round"],
-                status=p.get("status", "pending")
+                status=p.get("status", "pending"),
+                postponed_days=p.get("postponed_days", 0),
+                completed_at=datetime.fromisoformat(p["completed_at"]) if p.get("completed_at") else None
             )
             db.add(plan)
         

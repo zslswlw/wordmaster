@@ -35,7 +35,7 @@ const routes = [
         meta: { title: '学习组' }
       },
       {
-        path: 'study/:id',
+        path: 'study/:id?',
         name: 'Study',
         component: Study,
         meta: { title: '学习' }

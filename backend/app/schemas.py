@@ -64,6 +64,7 @@ class StudyGroupResponse(BaseModel):
     status: str
     created_at: datetime
     completed_at: Optional[datetime]
+    today_review_status: Optional[str] = None  # 'completed', 'pending', 'none'
 
     class Config:
         from_attributes = True
