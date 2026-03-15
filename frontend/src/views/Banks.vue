@@ -169,7 +169,7 @@ const handleImport = async () => {
   
   importing.value = true
   try {
-    await bankAPI.upload(importForm.file)
+    await bankAPI.upload(importForm.file, importForm.name)
     ElMessage.success('导入成功')
     showImportDialog.value = false
     // 重置表单

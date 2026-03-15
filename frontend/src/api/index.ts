@@ -39,10 +39,11 @@ export const authAPI = {
 
 export const bankAPI = {
   getAll: () => api.get('/banks'),
-  upload: (file: File) => {
+  upload: (file: File, name: string) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('/banks/upload', formData, {
+    formData.append('name', name)
+    return api.post('/banks', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
   },
