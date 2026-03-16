@@ -44,7 +44,10 @@ export const bankAPI = {
     formData.append('file', file)
     formData.append('name', name)
     return api.post('/banks', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
+      headers: { 
+        'Content-Type': 'multipart/form-data',
+        'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+      }
     })
   },
   delete: (id: number) => api.delete(`/banks/${id}`)

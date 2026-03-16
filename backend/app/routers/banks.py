@@ -26,34 +26,55 @@ async def import_bank(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    bank = WordBank(name=name, user_id=current_user.id, word_count=0)
-    db.add(bank)
-    db.commit()
-    db.refresh(bank)
+    try:
+        content = await file.read()
+        decoded = content.decode('utf-8-sig')
+        reader = csv.reader(io.StringIO(decoded))
+        
+        # 尝试读取表头
+        try:
+            next(reader, None)
+        except StopIteration:
+            raise HTTPException(status_code=400, detail="CSV文件为空或格式错误")
 
-    content = await file.read()
-    decoded = content.decode('utf-8-sig')
-    reader = csv.reader(io.StringIO(decoded))
-    next(reader, None)
-
-    words_to_add = []
-    for row in reader:
-        if len(row) >= 4:
-            word = Word(
-                bank_id=bank.id,
-                seq_num=int(row[0]),
-                word=row[1],
-                phonetic=row[2],
-                meaning=row[3]
-            )
-            words_to_add.append(word)
-    
-    db.bulk_save_objects(words_to_add)
-    bank.word_count = len(words_to_add)
-    db.commit()
-    db.refresh(bank)
-    
-    return bank
+        words_to_add = []
+        for row in reader:
+            if len(row) >= 4:
+                try:
+                    word = Word(
+                        bank_id=0,  # 临时值，后面会更新
+                        seq_num=int(row[0]),
+                        word=row[1],
+                        phonetic=row[2],
+                        meaning=row[3]
+                    )
+                    words_to_add.append(word)
+                except (ValueError, IndexError) as e:
+                    # 跳过格式错误的行
+                    continue
+        
+        if not words_to_add:
+            raise HTTPException(status_code=400, detail="CSV文件中没有有效的单词数据")
+        
+        # 创建词库
+        bank = WordBank(name=name, user_id=current_user.id, word_count=len(words_to_add))
+        db.add(bank)
+        db.commit()
+        db.refresh(bank)
+        
+        # 更新单词的词库ID
+        for word in words_to_add:
+            word.bank_id = bank.id
+        
+        db.bulk_save_objects(words_to_add)
+        db.commit()
+        db.refresh(bank)
+        
+        return bank
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
 
 
 @router.delete("/{bank_id}")
