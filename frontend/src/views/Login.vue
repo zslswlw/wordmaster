@@ -110,7 +110,27 @@ const handleLogin = async () => {
       console.error('登录错误详情:', error)
       console.error('错误响应:', error.response)
       console.error('错误请求:', error.request)
-      const errorMsg = error.response?.data?.detail || error.message || '登录失败'
+      
+      let errorMsg = '登录失败，请稍后重试'
+      if (error.response) {
+        // 服务器返回了错误响应
+        if (error.response.status === 401) {
+          errorMsg = error.response.data?.detail || '用户名或密码错误'
+        } else if (error.response.status === 404) {
+          errorMsg = '登录服务不可用，请检查网络连接'
+        } else if (error.response.status === 500) {
+          errorMsg = '服务器内部错误，请稍后重试'
+        } else {
+          errorMsg = error.response.data?.detail || `请求失败 (${error.response.status})`
+        }
+      } else if (error.request) {
+        // 请求已发送但没有收到响应
+        errorMsg = '无法连接到服务器，请检查网络连接'
+      } else {
+        // 请求配置出错
+        errorMsg = error.message || '登录失败'
+      }
+      
       ElMessage.error(errorMsg)
     } finally {
       loading.value = false
