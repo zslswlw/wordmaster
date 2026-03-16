@@ -158,16 +158,18 @@ const todayPlans = ref<ReviewPlan[]>([])
 const allPlans = ref<ReviewPlan[]>([])
 
 const overduePlans = computed(() => {
-  return allPlans.value.filter(plan => plan.is_overdue && plan.status !== 'completed')
+  const plans = Array.isArray(allPlans.value) ? allPlans.value : []
+  return plans.filter(plan => plan.is_overdue && plan.status !== 'completed')
 })
 
 const groupedPlans = computed(() => {
   const groups: { date: string; plans: ReviewPlan[] }[] = []
-  const dates = [...new Set(allPlans.value.map(p => p.review_date))]
+  const plans = Array.isArray(allPlans.value) ? allPlans.value : []
+  const dates = [...new Set(plans.map(p => p.review_date))]
   
   dates.forEach(date => {
-    const plans = allPlans.value.filter(p => p.review_date === date)
-    groups.push({ date, plans })
+    const datePlans = plans.filter(p => p.review_date === date)
+    groups.push({ date, plans: datePlans })
   })
   
   // Sort by date
@@ -223,18 +225,20 @@ const formatDate = (dateString: string) => {
 const loadTodayPlans = async () => {
   try {
     const response = await reviewAPI.getTodayPlans()
-    todayPlans.value = response.data
+    todayPlans.value = Array.isArray(response.data) ? response.data : []
   } catch (error) {
     ElMessage.error('加载今日复习计划失败')
+    todayPlans.value = []
   }
 }
 
 const loadAllPlans = async () => {
   try {
     const response = await reviewAPI.getAllPlans()
-    allPlans.value = response.data
+    allPlans.value = Array.isArray(response.data) ? response.data : []
   } catch (error) {
     ElMessage.error('加载全部复习计划失败')
+    allPlans.value = []
   }
 }
 

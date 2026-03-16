@@ -176,10 +176,14 @@ const loadStats = async () => {
       reviewAPI.getToday()
     ])
     
-    stats.value.banks = banksRes.data.length
-    stats.value.groups = groupsRes.data.length
-    stats.value.todayReview = reviewRes.data.length
-    stats.value.completed = groupsRes.data.filter((g: any) => g.status === 'completed').length
+    const banks = Array.isArray(banksRes.data) ? banksRes.data : []
+    const groups = Array.isArray(groupsRes.data) ? groupsRes.data : []
+    const reviews = Array.isArray(reviewRes.data) ? reviewRes.data : []
+    
+    stats.value.banks = banks.length
+    stats.value.groups = groups.length
+    stats.value.todayReview = reviews.length
+    stats.value.completed = groups.filter((g: any) => g.status === 'completed').length
   } catch (error) {
     console.error('加载统计数据失败', error)
   }

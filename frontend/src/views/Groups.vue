@@ -231,7 +231,8 @@ const formRules = {
 }
 
 const selectedBank = computed(() => {
-  return banks.value.find(b => b.id === form.bank_id)
+  const banksList = Array.isArray(banks.value) ? banks.value : []
+  return banksList.find(b => b.id === form.bank_id)
 })
 
 const maxSeq = computed(() => {
@@ -241,7 +242,8 @@ const maxSeq = computed(() => {
 watch(() => form.bank_id, (newVal, oldVal) => {
   if (newVal && oldVal) {
     // 只有切换词库时才调整，且只在当前值超出新词库范围时调整
-    const bank = banks.value.find(b => b.id === newVal)
+    const banksList = Array.isArray(banks.value) ? banks.value : []
+    const bank = banksList.find(b => b.id === newVal)
     if (bank) {
       // 如果当前结束序号超出新词库范围，则调整到词库最大值
       if (form.end_seq > bank.word_count) {
@@ -264,9 +266,10 @@ const loadGroups = async () => {
   loading.value = true
   try {
     const { data } = await groupAPI.getAll()
-    groups.value = data
+    groups.value = Array.isArray(data) ? data : []
   } catch (error) {
     ElMessage.error('加载学习组失败')
+    groups.value = []
   } finally {
     loading.value = false
   }
@@ -275,9 +278,10 @@ const loadGroups = async () => {
 const loadBanks = async () => {
   try {
     const { data } = await bankAPI.getAll()
-    banks.value = data
+    banks.value = Array.isArray(data) ? data : []
   } catch (error) {
     ElMessage.error('加载词库失败')
+    banks.value = []
   }
 }
 
@@ -292,7 +296,8 @@ const goToReview = () => {
 const goToGroupReview = async (groupId: number) => {
   try {
     const { data } = await reviewAPI.getGroupPlans(groupId)
-    const pendingPlan = data.find((p: any) => p.can_review)
+    const plans = Array.isArray(data) ? data : []
+    const pendingPlan = plans.find((p: any) => p.can_review)
     if (pendingPlan) {
       router.push(`/study?groupId=${groupId}&planId=${pendingPlan.plan_id}&isReview=true`)
     } else {
@@ -326,7 +331,8 @@ const handleDelete = async () => {
 }
 
 const openCreateDialog = () => {
-  if (banks.value.length === 0) {
+  const banksList = Array.isArray(banks.value) ? banks.value : []
+  if (banksList.length === 0) {
     ElMessage.warning('请先导入词库')
     router.push('/banks')
     return

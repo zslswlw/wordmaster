@@ -140,9 +140,10 @@ const loadBanks = async () => {
   loading.value = true
   try {
     const { data } = await bankAPI.getAll()
-    banks.value = data
+    banks.value = Array.isArray(data) ? data : []
   } catch (error) {
     ElMessage.error('加载词库失败')
+    banks.value = []
   } finally {
     loading.value = false
   }
