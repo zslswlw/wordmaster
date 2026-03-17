@@ -1,10 +1,10 @@
 <template>
-  <div class="backup-container">
+  <div class="backup-container" :class="{ mobile: isMobile }">
     <el-card>
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <el-button @click="goBack" circle>
+            <el-button @click="goBack" circle :size="isMobile ? 'small' : 'default'">
               <el-icon><ArrowLeft /></el-icon>
             </el-button>
             <span class="title">数据备份与恢复</span>
@@ -12,17 +12,17 @@
         </div>
       </template>
       
-      <el-row :gutter="20">
-        <el-col :span="12">
+      <el-row :gutter="isMobile ? 12 : 20">
+        <el-col :xs="24" :sm="24" :md="12" :lg="12">
           <el-card class="action-card" shadow="hover">
             <div class="action-icon">
-              <el-icon :size="48" color="#409eff"><Download /></el-icon>
+              <el-icon :size="isMobile ? 40 : 48" color="#409eff"><Download /></el-icon>
             </div>
             <h3>数据备份</h3>
             <p class="action-desc">将您的学习数据导出为备份文件，包含所有词库、学习记录和复习计划</p>
             <el-button 
               type="primary" 
-              size="large" 
+              :size="isMobile ? 'default' : 'large'"
               @click="handleBackup"
               :loading="backingUp"
               class="action-btn"
@@ -33,10 +33,10 @@
           </el-card>
         </el-col>
         
-        <el-col :span="12">
+        <el-col :xs="24" :sm="24" :md="12" :lg="12">
           <el-card class="action-card" shadow="hover">
             <div class="action-icon">
-              <el-icon :size="48" color="#67c23a"><Upload /></el-icon>
+              <el-icon :size="isMobile ? 40 : 48" color="#67c23a"><Upload /></el-icon>
             </div>
             <h3>数据恢复</h3>
             <p class="action-desc">从备份文件恢复您的学习数据，将覆盖当前所有数据</p>
@@ -52,7 +52,7 @@
             >
               <el-button 
                 type="success" 
-                size="large"
+                :size="isMobile ? 'default' : 'large'"
                 :loading="restoring"
                 class="action-btn"
               >
@@ -68,7 +68,7 @@
             <el-button 
               v-if="selectedFile"
               type="warning" 
-              size="large" 
+              :size="isMobile ? 'default' : 'large'"
               @click="handleRestore"
               :loading="restoring"
               class="action-btn restore-btn"
@@ -116,7 +116,7 @@
     <el-dialog
       v-model="showRestoreConfirm"
       title="确认恢复数据"
-      width="400px"
+      :width="isMobile ? '90%' : '400px'"
       :close-on-click-modal="false"
     >
       <el-alert
@@ -139,11 +139,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { backupAPI } from '../api'
 import { ArrowLeft, Download, Upload, RefreshRight } from '@element-plus/icons-vue'
+
+// 响应式检测
+const isMobile = ref(window.innerWidth <= 768)
+const handleResize = () => {
+  isMobile.value = window.innerWidth <= 768
+}
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
 
 const router = useRouter()
 const backingUp = ref(false)
@@ -230,10 +242,19 @@ const confirmRestore = async () => {
   margin: 0 auto;
 }
 
+.backup-container.mobile {
+  padding: 12px;
+  max-width: 100%;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.backup-container.mobile .card-header {
+  padding: 4px 0;
 }
 
 .header-left {
@@ -242,9 +263,17 @@ const confirmRestore = async () => {
   gap: 12px;
 }
 
+.backup-container.mobile .header-left {
+  gap: 8px;
+}
+
 .title {
   font-size: 18px;
   font-weight: bold;
+}
+
+.backup-container.mobile .title {
+  font-size: 16px;
 }
 
 .action-card {
@@ -253,14 +282,27 @@ const confirmRestore = async () => {
   height: 100%;
 }
 
+.backup-container.mobile .action-card {
+  padding: 24px 16px;
+  margin-bottom: 12px;
+}
+
 .action-icon {
   margin-bottom: 20px;
+}
+
+.backup-container.mobile .action-icon {
+  margin-bottom: 16px;
 }
 
 .action-card h3 {
   margin: 0 0 12px 0;
   font-size: 20px;
   color: #303133;
+}
+
+.backup-container.mobile .action-card h3 {
+  font-size: 18px;
 }
 
 .action-desc {
@@ -270,13 +312,35 @@ const confirmRestore = async () => {
   min-height: 48px;
 }
 
+.backup-container.mobile .action-desc {
+  font-size: 14px;
+  margin-bottom: 20px;
+  min-height: auto;
+}
+
 .action-btn {
   width: 100%;
   max-width: 200px;
 }
 
+.backup-container.mobile .action-btn {
+  max-width: 100%;
+}
+
 .upload-area {
   margin-bottom: 16px;
+}
+
+.backup-container.mobile .upload-area {
+  margin-bottom: 12px;
+}
+
+.backup-container.mobile :deep(.el-upload) {
+  width: 100%;
+}
+
+.backup-container.mobile :deep(.el-upload .el-button) {
+  width: 100%;
 }
 
 .restore-btn {
@@ -287,13 +351,26 @@ const confirmRestore = async () => {
   margin-top: 20px;
 }
 
+.backup-container.mobile .backup-info {
+  margin-top: 16px;
+}
+
 .backup-info h4 {
   margin-bottom: 16px;
   color: #303133;
 }
 
+.backup-container.mobile .backup-info h4 {
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
 .info-alert {
   margin-bottom: 16px;
+}
+
+.backup-container.mobile .info-alert {
+  margin-bottom: 12px;
 }
 
 .info-alert ul {
@@ -310,5 +387,40 @@ const confirmRestore = async () => {
   text-align: center;
   font-size: 16px;
   color: #606266;
+}
+
+.backup-container.mobile .confirm-text {
+  font-size: 14px;
+  margin-top: 16px;
+}
+
+/* 移动端列间距调整 */
+.backup-container.mobile :deep(.el-row) {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.backup-container.mobile :deep(.el-col) {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* 小屏幕手机适配 */
+@media (max-width: 375px) {
+  .backup-container.mobile {
+    padding: 8px;
+  }
+  
+  .backup-container.mobile .action-card {
+    padding: 20px 12px;
+  }
+  
+  .backup-container.mobile .action-card h3 {
+    font-size: 17px;
+  }
+  
+  .backup-container.mobile .action-desc {
+    font-size: 13px;
+  }
 }
 </style>

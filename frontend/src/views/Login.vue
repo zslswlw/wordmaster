@@ -2,6 +2,9 @@
   <div class="login-container">
     <div class="login-box">
       <div class="login-header">
+        <div class="logo-icon">
+          <el-icon :size="48" color="#667eea"><Collection /></el-icon>
+        </div>
         <h1>背单词系统</h1>
         <p>高效记忆，轻松学习</p>
       </div>
@@ -67,7 +70,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authAPI } from '../api'
-import { User, Lock } from '@element-plus/icons-vue'
+import { User, Lock, Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const formRef = ref()
@@ -107,7 +110,6 @@ const handleLogin = async () => {
   } catch (error: any) {
     let errorMsg = '登录失败，请稍后重试'
     if (error.response) {
-      // 服务器返回了错误响应
       if (error.response.status === 401) {
         errorMsg = error.response.data?.detail || '用户名或密码错误'
       } else if (error.response.status === 404) {
@@ -118,10 +120,8 @@ const handleLogin = async () => {
         errorMsg = error.response.data?.detail || `请求失败 (${error.response.status})`
       }
     } else if (error.request) {
-      // 请求已发送但没有收到响应
       errorMsg = '无法连接到服务器，请检查网络连接'
     } else {
-      // 请求配置出错
       errorMsg = error.message || '登录失败'
     }
     
@@ -136,7 +136,7 @@ const goToRegister = () => {
 }
 </script>
 
-<style scoped>
+<style scoped lang="scss">
 .login-container {
   min-height: 100vh;
   display: flex;
@@ -158,24 +158,41 @@ const goToRegister = () => {
 .login-header {
   text-align: center;
   margin-bottom: 32px;
+  
+  .logo-icon {
+    width: 80px;
+    height: 80px;
+    background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px;
+  }
+  
+  h1 {
+    margin: 0 0 8px 0;
+    font-size: 28px;
+    color: #303133;
+    font-weight: 600;
+  }
+  
+  p {
+    margin: 0;
+    color: #909399;
+    font-size: 14px;
+  }
 }
 
-.login-header h1 {
-  margin: 0 0 8px 0;
-  font-size: 28px;
-  color: #303133;
-  font-weight: 600;
-}
-
-.login-header p {
-  margin: 0;
-  color: #909399;
-  font-size: 14px;
-}
-
-.login-form :deep(.el-form-item__label) {
-  font-weight: 500;
-  color: #606266;
+.login-form {
+  :deep(.el-form-item__label) {
+    font-weight: 500;
+    color: #606266;
+  }
+  
+  :deep(.el-input__inner) {
+    font-size: 16px; // 防止 iOS 缩放
+  }
 }
 
 .login-btn {
@@ -183,6 +200,13 @@ const goToRegister = () => {
   margin-top: 8px;
   height: 44px;
   font-size: 16px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  
+  &:hover {
+    opacity: 0.9;
+  }
 }
 
 .login-footer {
@@ -190,5 +214,98 @@ const goToRegister = () => {
   margin-top: 24px;
   color: #606266;
   font-size: 14px;
+}
+
+// 移动端适配
+@media (max-width: 768px) {
+  .login-container {
+    padding: 16px;
+    align-items: flex-start;
+    padding-top: 60px;
+  }
+  
+  .login-box {
+    padding: 32px 24px;
+    border-radius: 12px;
+  }
+  
+  .login-header {
+    margin-bottom: 24px;
+    
+    .logo-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+    }
+    
+    h1 {
+      font-size: 24px;
+    }
+  }
+  
+  .login-btn {
+    height: 48px;
+    font-size: 17px;
+  }
+}
+
+// 手机横屏适配
+@media (max-width: 768px) and (orientation: landscape) {
+  .login-container {
+    padding-top: 20px;
+    align-items: center;
+  }
+  
+  .login-box {
+    max-width: 400px;
+    padding: 24px;
+  }
+  
+  .login-header {
+    margin-bottom: 16px;
+    
+    .logo-icon {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 8px;
+    }
+    
+    h1 {
+      font-size: 20px;
+    }
+    
+    p {
+      font-size: 12px;
+    }
+  }
+  
+  :deep(.el-form-item) {
+    margin-bottom: 12px;
+  }
+  
+  :deep(.el-form-item__label) {
+    font-size: 13px;
+    line-height: 28px;
+  }
+  
+  .login-btn {
+    height: 40px;
+    margin-top: 4px;
+  }
+  
+  .login-footer {
+    margin-top: 16px;
+  }
+}
+
+// 小屏手机适配
+@media (max-width: 375px) {
+  .login-box {
+    padding: 24px 20px;
+  }
+  
+  .login-header h1 {
+    font-size: 22px;
+  }
 }
 </style>

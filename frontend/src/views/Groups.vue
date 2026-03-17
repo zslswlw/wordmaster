@@ -1,17 +1,22 @@
 <template>
-  <div class="groups-container">
+  <div class="groups-container" :class="{ mobile: isMobile }">
     <el-card>
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <el-button @click="goBack" circle>
+            <el-button @click="goBack" circle :size="isMobile ? 'small' : 'default'">
               <el-icon><ArrowLeft /></el-icon>
             </el-button>
             <span class="title">学习组管理</span>
           </div>
-          <el-button type="primary" @click="openCreateDialog">
+          <el-button 
+            type="primary" 
+            @click="openCreateDialog"
+            :size="isMobile ? 'small' : 'default'"
+          >
             <el-icon><Plus /></el-icon>
-            创建学习组
+            <span v-if="!isMobile">创建学习组</span>
+            <span v-else>新建</span>
           </el-button>
         </div>
       </template>
@@ -24,7 +29,13 @@
         </el-empty>
       </div>
       
-      <el-table v-else :data="groups" style="width: 100%" v-loading="loading">
+      <!-- 桌面端表格 -->
+      <el-table 
+        v-else-if="!isMobile" 
+        :data="groups" 
+        style="width: 100%" 
+        v-loading="loading"
+      >
         <el-table-column type="index" label="序号" width="60" />
         <el-table-column prop="name" label="组名称" min-width="180" />
         <el-table-column label="单词范围" width="120">
@@ -106,12 +117,101 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 移动端卡片列表 -->
+      <div v-else class="mobile-list" v-loading="loading">
+        <div 
+          v-for="(group, index) in groups" 
+          :key="group.id"
+          class="mobile-card"
+        >
+          <div class="card-header-row">
+            <div class="card-main">
+              <div class="group-index">{{ index + 1 }}</div>
+              <div class="group-info">
+                <h4 class="group-name">{{ group.name }}</h4>
+                <div class="group-meta">
+                  <span class="word-range">{{ group.start_seq }} - {{ group.end_seq }}</span>
+                  <el-tag :type="getStatusType(group.status)" size="small">
+                    {{ getStatusText(group.status) }}
+                  </el-tag>
+                </div>
+              </div>
+            </div>
+            <div class="review-status">
+              <el-tag 
+                v-if="group.today_review_status === 'completed'" 
+                type="success" 
+                size="small"
+                effect="dark"
+              >
+                已复习
+              </el-tag>
+              <el-tag 
+                v-else-if="group.today_review_status === 'pending'" 
+                type="warning" 
+                size="small"
+                effect="dark"
+              >
+                待复习
+              </el-tag>
+            </div>
+          </div>
+          <div class="card-footer">
+            <span class="create-time">{{ formatDate(group.created_at) }}</span>
+            <div class="card-actions">
+              <el-button 
+                v-if="group.status !== 'completed'" 
+                type="primary" 
+                size="small" 
+                @click="startStudy(group.id)"
+              >
+                <el-icon><VideoPlay /></el-icon>
+                学习
+              </el-button>
+              <el-button 
+                v-else-if="group.today_review_status === 'pending'"
+                type="success" 
+                size="small" 
+                @click="goToGroupReview(group.id)"
+              >
+                <el-icon><RefreshRight /></el-icon>
+                复习
+              </el-button>
+              <el-button 
+                v-else-if="group.today_review_status === 'completed'"
+                type="info" 
+                size="small" 
+                disabled
+              >
+                已复习
+              </el-button>
+              <el-button 
+                v-else
+                type="info" 
+                size="small" 
+                disabled
+              >
+                暂无
+              </el-button>
+              <el-button 
+                type="danger" 
+                size="small" 
+                circle
+                @click="confirmDelete(group)"
+              >
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
     </el-card>
 
     <el-dialog 
       v-model="showCreateDialog" 
       title="创建学习组" 
-      width="500px"
+      :width="isMobile ? '90%' : '500px'"
       :close-on-click-modal="false"
     >
       <el-form :model="form" label-width="100px" ref="formRef" :rules="formRules">
@@ -160,7 +260,7 @@
     <el-dialog 
       v-model="showDeleteDialog" 
       title="确认删除" 
-      width="400px"
+      :width="isMobile ? '90%' : '400px'"
       :close-on-click-modal="false"
     >
       <el-alert 
@@ -184,11 +284,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { bankAPI, groupAPI, reviewAPI } from '../api'
 import { ArrowLeft, Plus, VideoPlay, RefreshRight, Delete } from '@element-plus/icons-vue'
+
+// 响应式检测
+const isMobile = ref(window.innerWidth <= 768)
+const handleResize = () => {
+  isMobile.value = window.innerWidth <= 768
+}
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
 
 interface Group {
   id: number
@@ -410,10 +522,18 @@ const formatDate = (dateStr: string) => {
   padding: 20px;
 }
 
+.groups-container.mobile {
+  padding: 12px;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.groups-container.mobile .card-header {
+  padding: 8px 0;
 }
 
 .header-left {
@@ -422,12 +542,141 @@ const formatDate = (dateStr: string) => {
   gap: 12px;
 }
 
+.groups-container.mobile .header-left {
+  gap: 8px;
+}
+
 .title {
   font-size: 18px;
   font-weight: bold;
 }
 
+.groups-container.mobile .title {
+  font-size: 16px;
+}
+
 .empty-state {
   padding: 60px 20px;
+}
+
+/* 移动端卡片列表样式 */
+.mobile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mobile-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border: 1px solid #ebeef5;
+}
+
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.card-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+}
+
+.group-index {
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.group-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.group-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+  margin: 0 0 8px 0;
+  line-height: 1.4;
+}
+
+.group-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.word-range {
+  font-size: 13px;
+  color: #606266;
+  background: #f5f7fa;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.review-status {
+  flex-shrink: 0;
+}
+
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 12px;
+  border-top: 1px solid #ebeef5;
+}
+
+.create-time {
+  font-size: 12px;
+  color: #909399;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 横屏适配 */
+@media (min-width: 569px) and (max-width: 896px) and (orientation: landscape) {
+  .mobile-list {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+}
+
+/* 小屏幕手机适配 */
+@media (max-width: 375px) {
+  .groups-container.mobile {
+    padding: 8px;
+  }
+  
+  .mobile-card {
+    padding: 12px;
+  }
+  
+  .group-name {
+    font-size: 15px;
+  }
+  
+  .card-actions {
+    gap: 4px;
+  }
 }
 </style>

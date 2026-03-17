@@ -9,7 +9,10 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "postcss-px-to-viewport": "^1.1.1",
+    "sass-embedded": "^1.98.0",
     "typescript": "~5.9.3",
+    "viewport-units-buggyfill": "^0.6.2",
     "vite": "^7.3.1"
   },
   "dependencies": {

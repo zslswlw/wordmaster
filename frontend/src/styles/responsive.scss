@@ -1,0 +1,116 @@
+// 响应式断点变量
+$breakpoints: (
+  'xs': 0,      // 超小屏（手机竖屏）
+  'sm': 576px,  // 小屏（手机横屏/小平板）
+  'md': 768px,  // 中屏（平板竖屏）
+  'lg': 992px,  // 大屏（平板横屏/小桌面）
+  'xl': 1200px, // 超大屏（桌面）
+  'xxl': 1400px // 超大屏（大桌面）
+);
+
+// 设备类型判断
+$mobile-max: 767px;
+$tablet-min: 768px;
+$tablet-max: 1024px;
+$desktop-min: 1025px;
+
+// 混合宏 - 媒体查询
+@mixin respond-to($breakpoint) {
+  @if map-has-key($breakpoints, $breakpoint) {
+    $value: map-get($breakpoints, $breakpoint);
+    @if $value == 0 {
+      @content;
+    } @else {
+      @media (min-width: $value) {
+        @content;
+      }
+    }
+  }
+}
+
+// 仅手机端
+@mixin mobile-only {
+  @media (max-width: #{$mobile-max}) {
+    @content;
+  }
+}
+
+// 仅平板端
+@mixin tablet-only {
+  @media (min-width: #{$tablet-min}) and (max-width: #{$tablet-max}) {
+    @content;
+  }
+}
+
+// 平板及以下
+@mixin tablet-and-down {
+  @media (max-width: #{$tablet-max}) {
+    @content;
+  }
+}
+
+// 平板及以上
+@mixin tablet-and-up {
+  @media (min-width: #{$tablet-min}) {
+    @content;
+  }
+}
+
+// 仅桌面端
+@mixin desktop-only {
+  @media (min-width: #{$desktop-min}) {
+    @content;
+  }
+}
+
+// 横屏
+@mixin landscape {
+  @media (orientation: landscape) {
+    @content;
+  }
+}
+
+// 竖屏
+@mixin portrait {
+  @media (orientation: portrait) {
+    @content;
+  }
+}
+
+// 手机横屏
+@mixin mobile-landscape {
+  @media (max-width: #{$mobile-max}) and (orientation: landscape) {
+    @content;
+  }
+}
+
+// 平板横屏
+@mixin tablet-landscape {
+  @media (min-width: #{$tablet-min}) and (max-width: #{$tablet-max}) and (orientation: landscape) {
+    @content;
+  }
+}
+
+// 安全区域适配（刘海屏）
+@mixin safe-area {
+  padding-top: constant(safe-area-inset-top);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: constant(safe-area-inset-left);
+  padding-left: env(safe-area-inset-left);
+  padding-right: constant(safe-area-inset-right);
+  padding-right: env(safe-area-inset-right);
+}
+
+// 底部安全区域
+@mixin safe-area-bottom {
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+// 顶部安全区域
+@mixin safe-area-top {
+  padding-top: constant(safe-area-inset-top);
+  padding-top: env(safe-area-inset-top);
+}

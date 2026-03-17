@@ -2,6 +2,9 @@
   <div class="register-container">
     <div class="register-box">
       <div class="register-header">
+        <div class="logo-icon">
+          <el-icon :size="48" color="#667eea"><Collection /></el-icon>
+        </div>
         <h1>注册账号</h1>
         <p>创建您的背单词账户</p>
       </div>
@@ -84,7 +87,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authAPI } from '../api'
-import { User, Lock, Key } from '@element-plus/icons-vue'
+import { User, Lock, Key, Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const formRef = ref()
@@ -152,7 +155,7 @@ const goToLogin = () => {
 }
 </script>
 
-<style scoped>
+<style scoped lang="scss">
 .register-container {
   min-height: 100vh;
   display: flex;
@@ -174,24 +177,41 @@ const goToLogin = () => {
 .register-header {
   text-align: center;
   margin-bottom: 32px;
+  
+  .logo-icon {
+    width: 80px;
+    height: 80px;
+    background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px;
+  }
+  
+  h1 {
+    margin: 0 0 8px 0;
+    font-size: 28px;
+    color: #303133;
+    font-weight: 600;
+  }
+  
+  p {
+    margin: 0;
+    color: #909399;
+    font-size: 14px;
+  }
 }
 
-.register-header h1 {
-  margin: 0 0 8px 0;
-  font-size: 28px;
-  color: #303133;
-  font-weight: 600;
-}
-
-.register-header p {
-  margin: 0;
-  color: #909399;
-  font-size: 14px;
-}
-
-.register-form :deep(.el-form-item__label) {
-  font-weight: 500;
-  color: #606266;
+.register-form {
+  :deep(.el-form-item__label) {
+    font-weight: 500;
+    color: #606266;
+  }
+  
+  :deep(.el-input__inner) {
+    font-size: 16px; // 防止 iOS 缩放
+  }
 }
 
 .register-btn {
@@ -199,6 +219,13 @@ const goToLogin = () => {
   margin-top: 8px;
   height: 44px;
   font-size: 16px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  
+  &:hover {
+    opacity: 0.9;
+  }
 }
 
 .register-footer {
@@ -206,5 +233,110 @@ const goToLogin = () => {
   margin-top: 24px;
   color: #606266;
   font-size: 14px;
+}
+
+// 移动端适配
+@media (max-width: 768px) {
+  .register-container {
+    padding: 16px;
+    align-items: flex-start;
+    padding-top: 40px;
+  }
+  
+  .register-box {
+    padding: 32px 24px;
+    border-radius: 12px;
+  }
+  
+  .register-header {
+    margin-bottom: 24px;
+    
+    .logo-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+    }
+    
+    h1 {
+      font-size: 24px;
+    }
+  }
+  
+  .register-btn {
+    height: 48px;
+    font-size: 17px;
+  }
+}
+
+// 手机横屏适配
+@media (max-width: 768px) and (orientation: landscape) {
+  .register-container {
+    padding-top: 16px;
+    align-items: center;
+  }
+  
+  .register-box {
+    max-width: 400px;
+    padding: 20px 24px;
+  }
+  
+  .register-header {
+    margin-bottom: 12px;
+    
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      margin-bottom: 8px;
+      
+      :deep(.el-icon) {
+        font-size: 24px !important;
+      }
+    }
+    
+    h1 {
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+    
+    p {
+      font-size: 12px;
+    }
+  }
+  
+  :deep(.el-form-item) {
+    margin-bottom: 8px;
+  }
+  
+  :deep(.el-form-item__label) {
+    font-size: 12px;
+    line-height: 24px;
+    padding-bottom: 4px;
+  }
+  
+  :deep(.el-input__inner) {
+    height: 36px;
+  }
+  
+  .register-btn {
+    height: 36px;
+    margin-top: 4px;
+    font-size: 15px;
+  }
+  
+  .register-footer {
+    margin-top: 12px;
+    font-size: 13px;
+  }
+}
+
+// 小屏手机适配
+@media (max-width: 375px) {
+  .register-box {
+    padding: 24px 20px;
+  }
+  
+  .register-header h1 {
+    font-size: 22px;
+  }
 }
 </style>

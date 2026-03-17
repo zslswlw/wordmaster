@@ -1,0 +1,304 @@
+// 移动端全局样式
+@import './responsive.scss';
+
+// 移动端基础设置
+.mobile-device {
+  // 禁止文本选择
+  user-select: none;
+  -webkit-user-select: none;
+  
+  // 触摸高亮
+  -webkit-tap-highlight-color: transparent;
+  
+  // 平滑滚动
+  -webkit-overflow-scrolling: touch;
+  
+  // 字体优化
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+// 移动端页面容器
+.mobile-container {
+  width: 100%;
+  min-height: 100vh;
+  padding: 16px;
+  box-sizing: border-box;
+  
+  @include safe-area;
+}
+
+// 移动端卡片样式
+.mobile-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+// 移动端按钮样式
+.mobile-btn {
+  width: 100%;
+  height: 44px;
+  border-radius: 22px;
+  font-size: 16px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  
+  &:active {
+    transform: scale(0.98);
+    opacity: 0.9;
+  }
+  
+  &.primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+  }
+  
+  &.secondary {
+    background: #f5f5f5;
+    color: #333;
+  }
+}
+
+// 移动端输入框
+.mobile-input {
+  width: 100%;
+  height: 48px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 0 16px;
+  font-size: 16px;
+  box-sizing: border-box;
+  
+  &:focus {
+    border-color: #667eea;
+    outline: none;
+  }
+}
+
+// 移动端底部导航栏
+.mobile-tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  background: #fff;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+  z-index: 1000;
+  
+  @include safe-area-bottom;
+  
+  .tab-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #999;
+    font-size: 12px;
+    cursor: pointer;
+    transition: color 0.2s;
+    
+    .el-icon {
+      font-size: 22px;
+      margin-bottom: 2px;
+    }
+    
+    &.active {
+      color: #667eea;
+    }
+    
+    &:active {
+      opacity: 0.7;
+    }
+  }
+}
+
+// 移动端顶部导航栏
+.mobile-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  z-index: 1000;
+  
+  @include safe-area-top;
+  
+  .header-left,
+  .header-right {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 0 16px;
+  }
+  
+  .header-left {
+    left: 0;
+  }
+  
+  .header-right {
+    right: 0;
+  }
+  
+  .header-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: #333;
+  }
+}
+
+// 内容区域（带顶部和底部导航预留）
+.mobile-content {
+  padding-top: 44px;
+  padding-bottom: 56px;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+// 横屏特殊处理
+@media (orientation: landscape) and (max-width: 1024px) {
+  .mobile-tab-bar {
+    height: 48px;
+    
+    .tab-item {
+      flex-direction: row;
+      font-size: 14px;
+      
+      .el-icon {
+        margin-bottom: 0;
+        margin-right: 6px;
+        font-size: 18px;
+      }
+    }
+  }
+  
+  .mobile-content {
+    padding-bottom: 48px;
+  }
+}
+
+// 触摸反馈
+.touch-feedback {
+  position: relative;
+  overflow: hidden;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.05);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  
+  &:active::after {
+    opacity: 1;
+  }
+}
+
+// 列表项样式
+.mobile-list-item {
+  display: flex;
+  align-items: center;
+  padding: 16px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+  
+  &:active {
+    background: #f5f5f5;
+  }
+  
+  .item-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 12px;
+    flex-shrink: 0;
+  }
+  
+  .item-content {
+    flex: 1;
+    min-width: 0;
+    
+    .item-title {
+      font-size: 16px;
+      color: #333;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .item-desc {
+      font-size: 13px;
+      color: #999;
+    }
+  }
+  
+  .item-arrow {
+    color: #ccc;
+    margin-left: 8px;
+  }
+}
+
+// 网格布局
+.mobile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  
+  @media (min-width: 768px) and (orientation: portrait) {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  
+  @media (orientation: landscape) {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+// 浮动操作按钮
+.mobile-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 72px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  cursor: pointer;
+  z-index: 999;
+  
+  &:active {
+    transform: scale(0.95);
+  }
+  
+  .el-icon {
+    font-size: 24px;
+  }
+}

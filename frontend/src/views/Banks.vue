@@ -4,18 +4,20 @@
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <el-button @click="goBack" circle>
+            <el-button v-if="isMobile" @click="goBack" circle size="small">
               <el-icon><ArrowLeft /></el-icon>
             </el-button>
             <span class="title">词库管理</span>
           </div>
-          <el-button type="primary" @click="showImportDialog = true">
+          <el-button type="primary" @click="showImportDialog = true" size="small">
             <el-icon><Plus /></el-icon>
-            导入词库
+            <span v-if="!isMobile">导入词库</span>
+            <span v-else>导入</span>
           </el-button>
         </div>
       </template>
       
+      <!-- 空状态 -->
       <div v-if="banks.length === 0" class="empty-state">
         <el-empty description="暂无词库，请先导入">
           <el-button type="primary" @click="showImportDialog = true">
@@ -24,6 +26,35 @@
         </el-empty>
       </div>
       
+      <!-- 移动端卡片列表 -->
+      <div v-else-if="isMobile" class="mobile-list">
+        <div 
+          v-for="bank in banks" 
+          :key="bank.id"
+          class="mobile-card"
+        >
+          <div class="card-content">
+            <div class="card-main">
+              <h4 class="bank-name">{{ bank.name }}</h4>
+              <div class="bank-meta">
+                <el-tag size="small" type="info">{{ bank.word_count }} 个单词</el-tag>
+                <span class="bank-date">{{ formatDate(bank.created_at) }}</span>
+              </div>
+            </div>
+            <el-button 
+              type="danger" 
+              size="small" 
+              circle
+              @click="handleDelete(bank)"
+              :loading="bank.deleting"
+            >
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 桌面端表格 -->
       <el-table v-else :data="banks" style="width: 100%" v-loading="loading">
         <el-table-column type="index" label="序号" width="60" />
         <el-table-column prop="name" label="词库名称" />
@@ -53,10 +84,11 @@
       </el-table>
     </el-card>
 
+    <!-- 导入对话框 -->
     <el-dialog 
       v-model="showImportDialog" 
       title="导入词库" 
-      width="500px"
+      :width="isMobile ? '90%' : '500px'"
       :close-on-click-modal="false"
     >
       <el-form :model="importForm" label-width="100px" ref="importFormRef">
@@ -109,6 +141,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { bankAPI } from '../api'
+import { useResponsive } from '../composables/useResponsive'
 import { ArrowLeft, Plus, Delete, Upload } from '@element-plus/icons-vue'
 
 interface Bank {
@@ -120,6 +153,7 @@ interface Bank {
 }
 
 const router = useRouter()
+const { isMobile } = useResponsive()
 const banks = ref<Bank[]>([])
 const loading = ref(false)
 const showImportDialog = ref(false)
@@ -173,7 +207,6 @@ const handleImport = async () => {
     await bankAPI.upload(importForm.file, importForm.name)
     ElMessage.success('导入成功')
     showImportDialog.value = false
-    // 重置表单
     importForm.name = ''
     importForm.file = null
     fileList.value = []
@@ -212,13 +245,16 @@ const handleDelete = async (row: Bank) => {
 const formatDate = (dateStr: string) => {
   if (!dateStr) return ''
   const date = new Date(dateStr)
+  if (isMobile.value) {
+    return date.toLocaleDateString('zh-CN')
+  }
   return date.toLocaleString('zh-CN')
 }
 </script>
 
-<style scoped>
+<style scoped lang="scss">
 .banks-container {
-  padding: 20px;
+  padding: 0;
 }
 
 .card-header {
@@ -234,11 +270,70 @@ const formatDate = (dateStr: string) => {
 }
 
 .title {
-  font-size: 18px;
-  font-weight: bold;
+  font-size: 17px;
+  font-weight: 600;
 }
 
 .empty-state {
-  padding: 60px 20px;
+  padding: 40px 20px;
+}
+
+// 移动端卡片列表
+.mobile-list {
+  .mobile-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    
+    .card-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    
+    .card-main {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .bank-name {
+      margin: 0 0 8px 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: #303133;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .bank-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      
+      .bank-date {
+        font-size: 12px;
+        color: #909399;
+      }
+    }
+  }
+}
+
+// 桌面端样式
+@media (min-width: 768px) {
+  .banks-container {
+    padding: 0;
+  }
+  
+  .title {
+    font-size: 18px;
+  }
+  
+  .empty-state {
+    padding: 60px 20px;
+  }
 }
 </style>
