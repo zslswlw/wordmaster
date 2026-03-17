@@ -296,34 +296,55 @@ const initStudy = async () => {
 
     // 先尝试普通学习模式
     let response = await studyAPI.startStudy(groupId.value, isReview, false, planId.value || undefined)
+    let isEnhanceMode = false
     
     // 如果没有可学习的单词，尝试强化学习模式
     if (response.data.word_ids.length === 0 && !isReview) {
       console.log('普通学习已完成，尝试强化学习模式')
       response = await studyAPI.startStudy(groupId.value, false, true, planId.value || undefined)
       if (response.data.word_ids.length > 0) {
+        isEnhanceMode = true
         enhanceMode.value = true
         studyType.value = 'enhance'
       }
     }
     
-    wordIds.value = response.data.word_ids
     currentRound.value = response.data.current_round
 
-    words.value = []
-    for (const id of wordIds.value) {
-      try {
-        const wordResponse = await studyAPI.getWord(id)
-        words.value.push(wordResponse.data)
-      } catch (error) {
-        console.error(`获取单词 ${id} 详情失败`, error)
+    if (isEnhanceMode) {
+      // 强化学习模式：使用 enhanceWordIds 和 enhanceWords
+      enhanceWordIds.value = response.data.word_ids
+      enhanceWords.value = []
+      for (const id of enhanceWordIds.value) {
+        try {
+          const wordResponse = await studyAPI.getWord(id)
+          enhanceWords.value.push(wordResponse.data)
+        } catch (error) {
+          console.error(`获取单词 ${id} 详情失败`, error)
+        }
       }
-    }
-
-    if (words.value.length === 0) {
-      ElMessage.error('没有可学习的单词')
-      router.push('/groups')
-      return
+      if (enhanceWords.value.length === 0) {
+        ElMessage.error('没有可学习的单词')
+        router.push('/groups')
+        return
+      }
+    } else {
+      // 普通学习模式：使用 wordIds 和 words
+      wordIds.value = response.data.word_ids
+      words.value = []
+      for (const id of wordIds.value) {
+        try {
+          const wordResponse = await studyAPI.getWord(id)
+          words.value.push(wordResponse.data)
+        } catch (error) {
+          console.error(`获取单词 ${id} 详情失败`, error)
+        }
+      }
+      if (words.value.length === 0) {
+        ElMessage.error('没有可学习的单词')
+        router.push('/groups')
+        return
+      }
     }
 
     setTimeout(() => {
