@@ -5,11 +5,25 @@ from .routers import auth, banks, groups, study, review, backup
 
 app = FastAPI(title="WordMaster API", description="背单词系统后端API")
 
+import os
+
+# 根据环境设置允许的域名
+ENV = os.getenv("ENV", "development")
+if ENV == "production":
+    allow_origins = [
+        "http://localhost",
+        "http://127.0.0.1",
+        # 添加你的生产域名，例如：
+        # "https://your-domain.com",
+    ]
+else:
+    allow_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境建议改为具体域名
+    allow_origins=allow_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 

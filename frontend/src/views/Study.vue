@@ -784,6 +784,7 @@ watch(userInput, () => {
   font-weight: 600;
   color: #303133;
   letter-spacing: 1px;
+  text-align: center; // 文字居中
   transition: all 0.3s ease;
   box-sizing: border-box;
   

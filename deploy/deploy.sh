@@ -81,22 +81,24 @@ log_info "步骤 5/7: 配置 Supervisor..."
 cat > /etc/supervisor/conf.d/wordmaster.conf << 'EOF'
 [program:wordmaster-backend]
 directory=/opt/wordmaster/backend
-command=/opt/wordmaster/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+; 使用 gunicorn 生产服务器，绑定本地地址（通过 Nginx 反向代理）
+command=/opt/wordmaster/backend/venv/bin/gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:8000 --access-logfile /var/log/wordmaster/backend.access.log --error-logfile /var/log/wordmaster/backend.error.log
 autostart=true
 autorestart=true
-user=root
+user=www-data
 stderr_logfile=/var/log/wordmaster/backend.err.log
 stdout_logfile=/var/log/wordmaster/backend.out.log
-environment=PYTHONPATH="/opt/wordmaster/backend"
+; 生产环境变量
+environment=PYTHONPATH="/opt/wordmaster/backend",ENV="production"
+; 进程管理
+stopasgroup=true
+killasgroup=true
+startsecs=5
+startretries=3
 
-[program:wordmaster-frontend]
-directory=/opt/wordmaster/frontend
-command=/usr/bin/npm run preview
-autostart=true
-autorestart=true
-user=root
-stderr_logfile=/var/log/wordmaster/frontend.err.log
-stdout_logfile=/var/log/wordmaster/frontend.out.log
+; 注意：前端不需要 Supervisor 管理！
+; 前端使用 Nginx 直接托管静态文件（dist/ 目录）
+; 严禁运行 npm run dev 或 npm run preview
 EOF
 
 # 6. 配置 Nginx
@@ -162,8 +164,18 @@ echo ""
 log_info "步骤 7/7: 启动服务..."
 
 # 重载 Supervisor
+echo ""
+log_info "配置 Supervisor..."
 supervisorctl reread
 supervisorctl update
+
+# 停止旧的 frontend 进程（如果存在）
+log_info "停止可能存在的旧前端进程..."
+supervisorctl stop wordmaster-frontend 2>/dev/null || true
+supervisorctl remove wordmaster-frontend 2>/dev/null || true
+
+# 启动后端
+log_info "启动后端服务..."
 supervisorctl start wordmaster-backend || supervisorctl restart wordmaster-backend
 
 # 重启 Nginx
