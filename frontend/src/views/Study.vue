@@ -768,6 +768,8 @@ watch(userInput, () => {
 .input-wrapper {
   position: relative;
   margin-bottom: 12px;
+  display: flex;
+  justify-content: center;
 }
 
 .word-input {
