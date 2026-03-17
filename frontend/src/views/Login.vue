@@ -12,14 +12,12 @@
         :rules="rules"
         label-position="top"
         class="login-form"
-        @submit.prevent="handleLogin"
       >
         <el-form-item label="用户名" prop="username">
           <el-input
             v-model="form.username"
             placeholder="请输入用户名"
             size="large"
-            @keyup.enter="handleLogin"
           >
             <template #prefix>
               <el-icon><User /></el-icon>
@@ -34,7 +32,6 @@
             placeholder="请输入密码"
             size="large"
             show-password
-            @keyup.enter="handleLogin"
           >
             <template #prefix>
               <el-icon><Lock /></el-icon>
@@ -47,7 +44,7 @@
             type="primary"
             size="large"
             :loading="loading"
-            @click="handleLogin"
+            @click.prevent="handleLogin"
             class="login-btn"
           >
             登 录
