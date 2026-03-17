@@ -66,8 +66,11 @@ export const groupAPI = {
 }
 
 export const studyAPI = {
-  startStudy: (groupId: number, isReview: boolean = false, isEnhance: boolean = false) => 
-    api.post(`/study/start/${groupId}?is_review=${isReview}&is_enhance=${isEnhance}`),
+  startStudy: (groupId: number, isReview: boolean = false, isEnhance: boolean = false, planId?: number) => {
+    let url = `/study/start/${groupId}?is_review=${isReview}&is_enhance=${isEnhance}`
+    if (planId) url += `&plan_id=${planId}`
+    return api.post(url)
+  },
   getWord: (wordId: number) => api.get(`/study/word/${wordId}`),
   checkAnswer: (data: { group_id: number; word_id: number; user_input: string; round: number; study_type: string; plan_id?: number }) => api.post('/study/check', data),
   getRoundStats: (groupId: number, currentRound?: number, studyType?: string) => 

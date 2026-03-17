@@ -294,7 +294,7 @@ const initStudy = async () => {
       }
     }
 
-    const response = await studyAPI.startStudy(groupId.value, isReview, false)
+    const response = await studyAPI.startStudy(groupId.value, isReview, false, planId.value || undefined)
     wordIds.value = response.data.word_ids
     currentRound.value = response.data.current_round
 

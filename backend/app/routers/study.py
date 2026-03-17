@@ -19,6 +19,7 @@ def start_study(
     group_id: int,
     is_review: bool = False,
     is_enhance: bool = False,
+    plan_id: int = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -46,11 +47,17 @@ def start_study(
     # 根据模式选择查询的学习类型
     query_study_type = "review" if is_review else ("enhance" if is_enhance else "new")
     
-    # 查询对应学习类型的记录
-    existing_records = db.query(StudyRecord).filter(
+    # 构建查询 - 复习模式时如果提供了plan_id，则只查询该计划的记录
+    records_query = db.query(StudyRecord).filter(
         StudyRecord.group_id == group_id,
         StudyRecord.study_type == query_study_type
-    ).all()
+    )
+    
+    # 如果提供了plan_id，只查询该复习计划的记录
+    if plan_id:
+        records_query = records_query.filter(StudyRecord.plan_id == plan_id)
+    
+    existing_records = records_query.all()
     
     max_round = 0
     if existing_records:
@@ -63,7 +70,9 @@ def start_study(
             wrong_word_ids.add(record.word_id)
     
     if is_review:
-        # 复习模式：只复习错误的单词
+        # 复习模式：复习整个学习组的所有单词
+        # 复习的进度基于当前plan_id的记录（如果有）
+        # 注意：如果没有plan_id，说明是新的开始，复习所有单词
         if wrong_word_ids:
             # 有错误，继续下一轮只听写错误的
             current_round = max_round + 1
@@ -85,7 +94,7 @@ def start_study(
                 current_round = max_round + 1
                 study_word_ids = word_ids
         else:
-            # 第一轮复习，听写所有单词
+            # 第一轮复习，听写所有单词（整个学习组的单词）
             current_round = 1
             study_word_ids = word_ids
     elif is_enhance:
