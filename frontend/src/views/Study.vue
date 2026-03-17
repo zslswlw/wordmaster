@@ -294,7 +294,19 @@ const initStudy = async () => {
       }
     }
 
-    const response = await studyAPI.startStudy(groupId.value, isReview, false, planId.value || undefined)
+    // 先尝试普通学习模式
+    let response = await studyAPI.startStudy(groupId.value, isReview, false, planId.value || undefined)
+    
+    // 如果没有可学习的单词，尝试强化学习模式
+    if (response.data.word_ids.length === 0 && !isReview) {
+      console.log('普通学习已完成，尝试强化学习模式')
+      response = await studyAPI.startStudy(groupId.value, false, true, planId.value || undefined)
+      if (response.data.word_ids.length > 0) {
+        enhanceMode.value = true
+        studyType.value = 'enhance'
+      }
+    }
+    
     wordIds.value = response.data.word_ids
     currentRound.value = response.data.current_round
 
