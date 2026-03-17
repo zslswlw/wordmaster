@@ -20,12 +20,15 @@ api.interceptors.request.use(
 
 api.interceptors.response.use(
   (response) => {
+    console.log('API 响应:', response.config.url, response.status)
     return response
   },
   (error) => {
+    console.log('API 错误:', error.config?.url, error.response?.status, error.message)
     if (error.response?.status === 401) {
       // 只在不是登录请求时才跳转
       const isLoginRequest = error.config?.url?.includes('/auth/login')
+      console.log('401 错误, 是否登录请求:', isLoginRequest)
       if (!isLoginRequest) {
         localStorage.removeItem('token')
         window.location.href = '/login'
