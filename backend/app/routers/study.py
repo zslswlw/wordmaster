@@ -65,8 +65,6 @@ def start_study(
     
     # 获取当前轮次的记录
     current_round_records = [r for r in existing_records if r.round == max_round]
-    # 判断当前轮次是否已完成（所有单词都有记录）
-    is_current_round_complete = len(current_round_records) >= len(word_ids) and max_round > 0
     
     # 获取当前轮次错误的单词ID
     wrong_word_ids = set()
@@ -78,6 +76,9 @@ def start_study(
         # 复习模式：复习整个学习组的所有单词
         # 复习的进度基于当前plan_id的记录（如果有）
         # 注意：如果没有plan_id，说明是新的开始，复习所有单词
+        
+        # 判断当前轮次是否已完成（所有单词都有记录）
+        is_current_round_complete = len(current_round_records) >= len(word_ids) and max_round > 0
         
         # 如果当前轮次未完成（有单词还没听写），继续当前轮次
         if not is_current_round_complete and existing_records:
@@ -153,25 +154,63 @@ def start_study(
             study_word_ids = word_ids
     else:
         # 普通学习模式：有错误只学习错误的，没错误学习全部
-        # 判断当前轮次是否已完成
-        if existing_records and not is_current_round_complete:
-            # 当前轮次未完成，继续当前轮次
-            studied_word_ids = set(r.word_id for r in current_round_records)
-            remaining_word_ids = [wid for wid in word_ids if wid not in studied_word_ids]
-            current_round = max_round
-            study_word_ids = remaining_word_ids if remaining_word_ids else word_ids
-        elif wrong_word_ids and is_current_round_complete:
-            # 当前轮次已完成且有错误，进入下一轮只听写错误的
-            current_round = max_round + 1
-            study_word_ids = list(wrong_word_ids)
-        elif existing_records and max_round > 0 and is_current_round_complete:
-            # 当前轮次已完成且全部正确，完成学习
-            current_round = max_round
-            study_word_ids = []
+        # 关键：需要确定当前轮次"应该"学习哪些单词
+        
+        if max_round <= 1:
+            # 第1轮或新开始：学习所有单词
+            is_current_round_complete = len(current_round_records) >= len(word_ids) and max_round > 0
+            
+            if not is_current_round_complete and existing_records:
+                # 第1轮未完成，继续
+                studied_word_ids = set(r.word_id for r in current_round_records)
+                remaining_word_ids = [wid for wid in word_ids if wid not in studied_word_ids]
+                current_round = max_round
+                study_word_ids = remaining_word_ids if remaining_word_ids else word_ids
+            elif wrong_word_ids and is_current_round_complete:
+                # 第1轮完成且有错误，进入第2轮只听写错误的
+                current_round = max_round + 1
+                study_word_ids = list(wrong_word_ids)
+            elif is_current_round_complete:
+                # 第1轮完成且全部正确，完成学习
+                current_round = max_round
+                study_word_ids = []
+            else:
+                # 新开始
+                current_round = 1
+                study_word_ids = word_ids
         else:
-            # 新开始，学习所有单词
-            current_round = 1
-            study_word_ids = word_ids
+            # 第2轮及以后：只学习上一轮错误的单词
+            # 获取上一轮的错误单词
+            prev_round_records = [r for r in existing_records if r.round == max_round - 1]
+            prev_wrong_word_ids = set()
+            for record in prev_round_records:
+                if not record.correct:
+                    prev_wrong_word_ids.add(record.word_id)
+            
+            # 当前轮次应该学习的单词 = 上一轮的错误单词
+            target_word_ids = list(prev_wrong_word_ids) if prev_wrong_word_ids else []
+            
+            # 判断当前轮次是否完成（基于应该学习的单词数）
+            is_current_round_complete = len(current_round_records) >= len(target_word_ids) and max_round > 0
+            
+            if not is_current_round_complete and existing_records:
+                # 当前轮次未完成，继续
+                studied_word_ids = set(r.word_id for r in current_round_records)
+                remaining_word_ids = [wid for wid in target_word_ids if wid not in studied_word_ids]
+                current_round = max_round
+                study_word_ids = remaining_word_ids if remaining_word_ids else target_word_ids
+            elif wrong_word_ids and is_current_round_complete:
+                # 当前轮次完成但还有错误，进入下一轮只听写这些错误
+                current_round = max_round + 1
+                study_word_ids = list(wrong_word_ids)
+            elif is_current_round_complete:
+                # 当前轮次完成且全部正确，完成学习
+                current_round = max_round
+                study_word_ids = []
+            else:
+                # 不应该到达这里，但保险起见
+                current_round = max_round
+                study_word_ids = target_word_ids
     
     random.shuffle(study_word_ids)
     
