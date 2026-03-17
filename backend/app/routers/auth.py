@@ -41,14 +41,12 @@ def login(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
-            headers={"WWW-Authenticate": "Bearer"},
         )
     if not verify_password(user.password, db_user.password_hash):
         logger.warning(f"密码验证失败: {user.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
-            headers={"WWW-Authenticate": "Bearer"},
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
