@@ -129,7 +129,8 @@ const handleLogin = async () => {
       errorMsg = error.message || '登录失败'
     }
     
-    // 使用 nextTick 确保消息在 DOM 更新后显示
+    // 使用 alert 测试是否能显示错误
+    alert('登录错误: ' + errorMsg)
     ElMessage.error(errorMsg)
   } finally {
     loading.value = false
