@@ -164,8 +164,12 @@ def start_study(
             # 当前轮次已完成且有错误，进入下一轮只听写错误的
             current_round = max_round + 1
             study_word_ids = list(wrong_word_ids)
+        elif existing_records and max_round > 0 and is_current_round_complete:
+            # 当前轮次已完成且全部正确，完成学习
+            current_round = max_round
+            study_word_ids = []
         else:
-            # 新开始或全部正确，学习所有单词
+            # 新开始，学习所有单词
             current_round = 1
             study_word_ids = word_ids
     
