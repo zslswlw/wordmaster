@@ -315,6 +315,7 @@ const initStudy = async () => {
       // 强化学习模式：使用 enhanceWordIds 和 enhanceWords
       enhanceWordIds.value = response.data.word_ids
       enhanceWords.value = []
+      enhanceIndex.value = 0  // 重置索引
       for (const id of enhanceWordIds.value) {
         try {
           const wordResponse = await studyAPI.getWord(id)
@@ -332,6 +333,7 @@ const initStudy = async () => {
       // 普通学习模式：使用 wordIds 和 words
       wordIds.value = response.data.word_ids
       words.value = []
+      currentIndex.value = 0  // 重置索引
       for (const id of wordIds.value) {
         try {
           const wordResponse = await studyAPI.getWord(id)
