@@ -168,13 +168,9 @@ const handleImport = async () => {
     return
   }
   
-  console.log('开始导入，文件名:', importForm.file.name, '大小:', importForm.file.size)
-  console.log('Token:', localStorage.getItem('token'))
-  
   importing.value = true
   try {
-    const response = await bankAPI.upload(importForm.file, importForm.name)
-    console.log('导入成功，响应:', response)
+    await bankAPI.upload(importForm.file, importForm.name)
     ElMessage.success('导入成功')
     showImportDialog.value = false
     // 重置表单
@@ -183,8 +179,6 @@ const handleImport = async () => {
     fileList.value = []
     await loadBanks()
   } catch (error: any) {
-    console.error('导入失败:', error)
-    console.error('错误响应:', error.response)
     ElMessage.error(error.response?.data?.detail || '导入失败')
   } finally {
     importing.value = false
