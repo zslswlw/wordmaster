@@ -34,23 +34,33 @@
       </div>
 
       <div class="input-section">
-        <!-- 打字效果显示区域 -->
-        <div v-if="!answerSubmitted" class="typing-display" @click="focusInput">
-          <span class="typed-text">{{ userInput }}</span>
-          <span class="cursor" :class="{ 'cursor-blink': !answerSubmitted }">|</span>
+        <!-- 可见的输入框 - 移动端友好 -->
+        <div v-if="!answerSubmitted" class="input-wrapper">
+          <input
+            ref="inputRef"
+            v-model="userInput"
+            type="text"
+            class="word-input"
+            @keyup.enter="handleSubmit"
+            :disabled="answerSubmitted"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellcheck="false"
+            enterkeyhint="done"
+            inputmode="text"
+            placeholder="输入单词..."
+          />
+          <!-- 清除按钮 -->
+          <button 
+            v-if="userInput" 
+            class="clear-btn" 
+            @click="clearInput"
+            type="button"
+          >
+            <el-icon><CircleClose /></el-icon>
+          </button>
         </div>
-        <!-- 隐藏的实际输入框 -->
-        <input
-          ref="inputRef"
-          v-model="userInput"
-          type="text"
-          class="hidden-input"
-          @keyup.enter="handleSubmit"
-          :disabled="answerSubmitted"
-          autocomplete="off"
-          autocapitalize="off"
-          spellcheck="false"
-        />
         <!-- 提交按钮 -->
         <div v-if="!answerSubmitted" class="submit-area">
           <el-button 
@@ -160,6 +170,22 @@ import {
   Warning,
   ArrowRight
 } from '@element-plus/icons-vue'
+
+// 清除输入
+const clearInput = () => {
+  userInput.value = ''
+  focusInput()
+}
+
+// 处理返回键
+const handleBackButton = (e: PopStateEvent) => {
+  if (!showRoundResult.value && !showQuitConfirm.value) {
+    e.preventDefault()
+    showQuitConfirm.value = true
+    // 阻止默认返回行为
+    history.pushState(null, '', location.href)
+  }
+}
 
 const router = useRouter()
 const route = useRoute()
@@ -573,6 +599,10 @@ onMounted(() => {
   initStudy()
   focusInput()
   
+  // 添加历史记录以拦截返回键
+  history.pushState(null, '', location.href)
+  window.addEventListener('popstate', handleBackButton)
+  
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       if (showRoundResult.value) {
@@ -734,55 +764,84 @@ watch(userInput, () => {
   text-align: center;
 }
 
-.typing-display {
-  min-height: 50px;
-  padding: 10px 16px;
+// 输入框包装器
+.input-wrapper {
+  position: relative;
   margin-bottom: 12px;
+}
+
+.word-input {
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 44px 12px 16px;
   background-color: #f5f7fa;
   border: 2px solid #e4e7ed;
-  border-radius: 8px;
-  cursor: text;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  border-radius: 12px;
   font-family: 'Courier New', monospace;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
   color: #303133;
   letter-spacing: 1px;
   transition: all 0.3s ease;
+  box-sizing: border-box;
   
-  &:active {
+  &:focus {
+    outline: none;
     border-color: #409EFF;
     background-color: #fff;
+    box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.1);
+  }
+  
+  &::placeholder {
+    color: #c0c4cc;
+    font-weight: 400;
+  }
+  
+  // 禁用自动填充背景色
+  &:-webkit-autofill,
+  &:-webkit-autofill:hover,
+  &:-webkit-autofill:focus {
+    -webkit-box-shadow: 0 0 0px 1000px #f5f7fa inset;
+    transition: background-color 5000s ease-in-out 0s;
   }
 }
 
-.typed-text {
-  min-height: 28px;
-}
-
-.cursor {
-  color: #409EFF;
-  font-weight: 300;
-  margin-left: 2px;
-}
-
-.cursor-blink {
-  animation: blink 1s infinite;
-}
-
-@keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
-}
-
-.hidden-input {
+// 清除按钮
+.clear-btn {
   position: absolute;
-  opacity: 0;
-  pointer-events: none;
-  width: 0;
-  height: 0;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: #dcdfe6;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  transition: all 0.2s ease;
+  padding: 0;
+  
+  &:active {
+    transform: translateY(-50%) scale(0.9);
+    background: #c0c4cc;
+  }
+  
+  .el-icon {
+    font-size: 14px;
+  }
+}
+
+// 移除旧的样式
+.typing-display,
+.typed-text,
+.cursor,
+.cursor-blink,
+.hidden-input {
+  display: none;
 }
 
 .submit-area {
