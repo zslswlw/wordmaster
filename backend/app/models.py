@@ -3,6 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Date, Text
 from datetime import datetime
+import time
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./wordmaster.db"
 
@@ -14,13 +15,18 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+# 获取本地时间的辅助函数
+def get_local_datetime():
+    return datetime.fromtimestamp(time.time())
+
+
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=get_local_datetime)
 
 
 class WordBank(Base):
@@ -30,7 +36,7 @@ class WordBank(Base):
     name = Column(String, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     word_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=get_local_datetime)
 
 
 class Word(Base):
@@ -54,7 +60,7 @@ class StudyGroup(Base):
     start_seq = Column(Integer, nullable=False)
     end_seq = Column(Integer, nullable=False)
     status = Column(String, default="new")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=get_local_datetime)
     completed_at = Column(DateTime, nullable=True)
 
 
