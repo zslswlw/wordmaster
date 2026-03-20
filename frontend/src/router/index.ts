@@ -8,6 +8,7 @@ import Groups from '../views/Groups.vue'
 import Study from '../views/Study.vue'
 import Review from '../views/Review.vue'
 import Backup from '../views/Backup.vue'
+import AudioManage from '../views/AudioManage.vue'
 
 const routes = [
   {
@@ -51,6 +52,12 @@ const routes = [
         name: 'Backup',
         component: Backup,
         meta: { title: '数据备份' }
+      },
+      {
+        path: 'audio',
+        name: 'AudioManage',
+        component: AudioManage,
+        meta: { title: '音频管理' }
       }
     ]
   },

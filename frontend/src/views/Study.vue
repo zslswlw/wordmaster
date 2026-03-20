@@ -358,25 +358,92 @@ const initStudy = async () => {
   }
 }
 
-const playPronunciation = () => {
+// 音频管理器
+class AudioManager {
+  private cache: Map<string, HTMLAudioElement> = new Map()
+  
+  // 获取音频路径
+  private getAudioPath(word: string): string {
+    const firstLetter = word[0].toLowerCase()
+    return `/audio/${firstLetter}/${word.toLowerCase()}.mp3`
+  }
+  
+  // 播放音频（优先本地，降级TTS）
+  async play(word: string): Promise<void> {
+    // 1. 检查内存缓存
+    if (this.cache.has(word)) {
+      const audio = this.cache.get(word)!
+      audio.currentTime = 0
+      await audio.play()
+      return
+    }
+    
+    // 2. 尝试播放本地音频
+    try {
+      const audioPath = this.getAudioPath(word)
+      const audio = new Audio(audioPath)
+      
+      await new Promise<void>((resolve, reject) => {
+        audio.oncanplaythrough = () => resolve()
+        audio.onerror = () => reject(new Error('Audio load failed'))
+        audio.load()
+      })
+      
+      this.cache.set(word, audio)
+      await audio.play()
+      return
+    } catch (e) {
+      // 本地音频不存在或加载失败，降级到TTS
+      console.log(`Local audio not found for "${word}", falling back to TTS`)
+    }
+    
+    // 3. 降级到 Web Speech API
+    this.playTTS(word)
+  }
+  
+  // TTS 播放
+  private playTTS(word: string): void {
+    if ('speechSynthesis' in window) {
+      const utterance = new SpeechSynthesisUtterance(word)
+      utterance.lang = 'en-US'
+      utterance.rate = 0.8
+      speechSynthesis.speak(utterance)
+    }
+  }
+  
+  // 预加载音频
+  preload(word: string): void {
+    if (this.cache.has(word)) return
+    
+    const audioPath = this.getAudioPath(word)
+    const audio = new Audio(audioPath)
+    audio.preload = 'auto'
+    
+    audio.oncanplaythrough = () => {
+      this.cache.set(word, audio)
+    }
+    
+    audio.load()
+  }
+}
+
+// 全局音频管理器实例
+const audioManager = new AudioManager()
+
+const playPronunciation = async () => {
   if (!currentWord.value) return
   
-  const word = currentWord.value.word
-  if ('speechSynthesis' in window) {
-    isPlaying.value = true
-    const utterance = new SpeechSynthesisUtterance(word)
-    utterance.lang = 'en-US'
-    utterance.rate = 0.8
-    
-    utterance.onend = () => {
+  isPlaying.value = true
+  
+  try {
+    await audioManager.play(currentWord.value.word)
+  } catch (error) {
+    console.error('Play audio failed:', error)
+  } finally {
+    // 音频播放结束后重置状态
+    setTimeout(() => {
       isPlaying.value = false
-    }
-    
-    utterance.onerror = () => {
-      isPlaying.value = false
-    }
-    
-    speechSynthesis.speak(utterance)
+    }, 1000)
   }
 }
 

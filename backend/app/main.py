@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import auth, banks, groups, study, review, backup
+from .routers import auth, banks, groups, study, review, backup, audio
 
 app = FastAPI(title="WordMaster API", description="背单词系统后端API")
 
@@ -33,6 +33,7 @@ app.include_router(groups.router)
 app.include_router(study.router)
 app.include_router(review.router)
 app.include_router(backup.router)
+app.include_router(audio.router)
 
 
 @app.get("/")

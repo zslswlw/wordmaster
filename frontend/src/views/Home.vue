@@ -30,6 +30,10 @@
             <el-icon><Download /></el-icon>
             <span>数据备份</span>
           </el-menu-item>
+          <el-menu-item index="/audio">
+            <el-icon><Headset /></el-icon>
+            <span>音频管理</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       
@@ -85,7 +89,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authAPI } from '../api'
 import { useResponsive } from '../composables/useResponsive'
-import { HomeFilled, Collection, FolderOpened, Calendar, Download, UserFilled } from '@element-plus/icons-vue'
+import { HomeFilled, Collection, FolderOpened, Calendar, Download, UserFilled, Headset } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
