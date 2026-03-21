@@ -300,8 +300,8 @@ const startReview = (plan: ReviewPlan) => {
     return
   }
   
-  localStorage.setItem('reviewPlanId', plan.plan_id.toString())
-  router.push(`/study/${plan.group_id}`)
+  // 使用查询参数传递 planId 和 isReview，与学习组页面的复习跳转保持一致
+  router.push(`/study/${plan.group_id}?planId=${plan.plan_id}&isReview=true`)
 }
 
 const getStatusType = (plan: ReviewPlan) => {

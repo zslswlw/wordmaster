@@ -7,7 +7,7 @@
             <el-icon><ArrowLeft /></el-icon>
           </el-button>
           <div class="title-section">
-            <h2>{{ enhanceMode ? '强化听写' : '单词学习' }}</h2>
+            <h2>{{ studyModeTitle }}</h2>
             <div class="progress-bar">
               <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
             </div>
@@ -128,7 +128,7 @@
       </div>
       <template #footer>
         <el-button v-if="nextStep === 'continue'" type="primary" size="large" @click="continueStudy" autofocus class="dialog-btn">
-          {{ enhanceMode ? '继续强化' : '继续下一轮' }}
+          {{ nextStepButtonText }}
         </el-button>
         <el-button v-else-if="nextStep === 'enhance'" type="warning" size="large" @click="startEnhance" autofocus class="dialog-btn">
           开始强化听写
@@ -233,6 +233,17 @@ const nextStep = ref('')
 const showQuitConfirm = ref(false)
 const inputRef = ref<HTMLInputElement | null>(null)
 
+// 根据学习模式返回继续按钮的文案
+const nextStepButtonText = computed(() => {
+  if (enhanceMode.value) {
+    return '继续强化'
+  }
+  if (studyType.value === 'review') {
+    return '继续复习'
+  }
+  return '继续学习'
+})
+
 const currentWord = computed(() => {
   if (enhanceMode.value) {
     return enhanceWords.value[enhanceIndex.value]
@@ -256,6 +267,17 @@ const totalWords = computed(() => {
 
 const progressPercent = computed(() => {
   return (currentWordIndex.value / totalWords.value) * 100
+})
+
+// 根据学习模式返回对应的标题
+const studyModeTitle = computed(() => {
+  if (enhanceMode.value) {
+    return '强化听写'
+  }
+  if (studyType.value === 'review') {
+    return '单词复习'
+  }
+  return '单词学习'
 })
 
 const isLastWord = computed(() => {
@@ -685,7 +707,14 @@ const finishStudy = async () => {
   
   try {
     await studyAPI.completeStudy(groupId.value, enhanceMode.value, studyType.value, planId.value)
-    ElMessage.success('学习完成！')
+    // 根据学习模式显示不同的完成提示
+    let successMessage = '学习完成！'
+    if (enhanceMode.value) {
+      successMessage = '强化听写完成！'
+    } else if (studyType.value === 'review') {
+      successMessage = '单词复习完成！'
+    }
+    ElMessage.success(successMessage)
     router.push('/groups')
   } catch (error) {
     ElMessage.error('保存学习记录失败')
