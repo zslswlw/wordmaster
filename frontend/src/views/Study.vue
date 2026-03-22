@@ -383,6 +383,8 @@ const initStudy = async () => {
 // 音频管理器
 class AudioManager {
   private cache: Map<string, HTMLAudioElement> = new Map()
+  private currentAudio: HTMLAudioElement | null = null
+  private ttsTimeout: number | null = null
   
   // 获取音频路径
   private getAudioPath(word: string): string {
@@ -390,12 +392,37 @@ class AudioManager {
     return `/audio/${firstLetter}/${word.toLowerCase()}.mp3`
   }
   
+  // 停止当前播放的音频
+  stop(): void {
+    // 停止本地音频
+    if (this.currentAudio) {
+      this.currentAudio.pause()
+      this.currentAudio.currentTime = 0
+      this.currentAudio = null
+    }
+    
+    // 停止 TTS
+    if ('speechSynthesis' in window) {
+      speechSynthesis.cancel()
+    }
+    
+    // 清除定时器
+    if (this.ttsTimeout) {
+      clearTimeout(this.ttsTimeout)
+      this.ttsTimeout = null
+    }
+  }
+  
   // 播放音频（优先本地，降级TTS）
   async play(word: string): Promise<void> {
+    // 先停止之前的音频
+    this.stop()
+    
     // 1. 检查内存缓存
     if (this.cache.has(word)) {
       const audio = this.cache.get(word)!
       audio.currentTime = 0
+      this.currentAudio = audio
       await audio.play()
       return
     }
@@ -412,6 +439,7 @@ class AudioManager {
       })
       
       this.cache.set(word, audio)
+      this.currentAudio = audio
       await audio.play()
       return
     } catch (e) {
@@ -479,11 +507,16 @@ class AudioManager {
   
   // 播放中英文（先英文后中文）
   async playWithMeaning(word: string, meaning: string): Promise<void> {
+    // 先停止之前的音频
+    this.stop()
+    
     // 先播放英文
     await this.play(word)
     
     // 等待英文播放完成后再播放中文（2秒间隔，给用户充分的反应和回忆时间）
-    await new Promise(resolve => setTimeout(resolve, 2000))
+    await new Promise(resolve => {
+      this.ttsTimeout = window.setTimeout(resolve, 2000)
+    })
     
     // 播放中文释义（会自动清洗）
     this.playChineseTTS(meaning)
@@ -562,6 +595,10 @@ const handleSubmit = async () => {
 }
 
 const handleNext = () => {
+  // 停止当前播放的音频
+  audioManager.stop()
+  isPlaying.value = false
+  
   userInput.value = ''
   answerSubmitted.value = false
   lastResult.value = null
