@@ -423,7 +423,7 @@ class AudioManager {
     this.playTTS(word)
   }
   
-  // TTS 播放
+  // TTS 播放英文
   private playTTS(word: string): void {
     if ('speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(word)
@@ -431,6 +431,62 @@ class AudioManager {
       utterance.rate = 0.8
       speechSynthesis.speak(utterance)
     }
+  }
+  
+  // 清洗和摘要中文释义，用于语音播放
+  private cleanMeaningForTTS(meaning: string): string {
+    if (!meaning) return ''
+    
+    // 步骤1: 去除词性标注 (n. v. adj. adv. prep. conj. vt. vi. 等)
+    let cleaned = meaning.replace(/\b(n|v|adj|adv|prep|conj|vt|vi|art|num|int)\.\s*/gi, '')
+    
+    // 步骤2: 按分号或句号分割，取前2个义项
+    const segments = cleaned.split(/[；。;]/)
+    let selectedSegments = segments.slice(0, 2)
+    
+    // 步骤3: 清理每个义项内的逗号，只保留第一个
+    selectedSegments = selectedSegments.map(segment => {
+      const parts = segment.split(/[，,]/)
+      // 取逗号分隔的第一部分，避免太长
+      return parts[0].trim()
+    })
+    
+    // 步骤4: 用"、"连接多个义项，更适合语音播放
+    let result = selectedSegments.join('、')
+    
+    // 步骤5: 限制长度（最多20个字符），避免播放过长
+    if (result.length > 20) {
+      result = result.substring(0, 20) + '...'
+    }
+    
+    // 步骤6: 清理多余空格和特殊字符
+    result = result.replace(/\s+/g, ' ').trim()
+    
+    return result
+  }
+  
+  // TTS 播放中文释义
+  private playChineseTTS(meaning: string): void {
+    if ('speechSynthesis' in window) {
+      // 清洗释义后再播放
+      const cleanedMeaning = this.cleanMeaningForTTS(meaning)
+      const utterance = new SpeechSynthesisUtterance(cleanedMeaning)
+      utterance.lang = 'zh-CN'
+      utterance.rate = 1.0
+      speechSynthesis.speak(utterance)
+    }
+  }
+  
+  // 播放中英文（先英文后中文）
+  async playWithMeaning(word: string, meaning: string): Promise<void> {
+    // 先播放英文
+    await this.play(word)
+    
+    // 等待英文播放完成后再播放中文
+    await new Promise(resolve => setTimeout(resolve, 800))
+    
+    // 播放中文释义（会自动清洗）
+    this.playChineseTTS(meaning)
   }
   
   // 预加载音频
@@ -458,14 +514,15 @@ const playPronunciation = async () => {
   isPlaying.value = true
   
   try {
-    await audioManager.play(currentWord.value.word)
+    // 同时播放英文和中文释义
+    await audioManager.playWithMeaning(currentWord.value.word, currentWord.value.meaning)
   } catch (error) {
     console.error('Play audio failed:', error)
   } finally {
-    // 音频播放结束后重置状态
+    // 音频播放结束后重置状态（中英文总时长约2-3秒）
     setTimeout(() => {
       isPlaying.value = false
-    }, 1000)
+    }, 3000)
   }
 }
 
