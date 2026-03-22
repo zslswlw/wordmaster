@@ -483,7 +483,7 @@ class AudioManager {
     await this.play(word)
     
     // 等待英文播放完成后再播放中文（2秒间隔，给用户充分的反应和回忆时间）
-    await new Promise(resolve => setTimeout(resolve, 4000))
+    await new Promise(resolve => setTimeout(resolve, 2000))
     
     // 播放中文释义（会自动清洗）
     this.playChineseTTS(meaning)
