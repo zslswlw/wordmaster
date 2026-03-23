@@ -74,7 +74,8 @@ def start_study(
         "group_name": group.name,
         "total_words": len(study_word_ids),
         "current_round": current_round,
-        "word_ids": study_word_ids
+        "word_ids": study_word_ids,
+        "is_completed": is_completed
     }
 
 

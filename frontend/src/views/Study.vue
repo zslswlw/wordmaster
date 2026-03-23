@@ -319,7 +319,14 @@ const initStudy = async () => {
     // 先尝试普通学习模式
     let response = await studyAPI.startStudy(groupId.value, isReview, false, planId.value || undefined)
     let isEnhanceMode = false
-    
+
+    // 如果后端标记为已完成，直接结束学习
+    if (response.data.is_completed) {
+      ElMessage.success('该学习组已完成学习！')
+      router.push('/groups')
+      return
+    }
+
     // 如果没有可学习的单词，尝试强化学习模式
     if (response.data.word_ids.length === 0 && !isReview) {
       console.log('普通学习已完成，尝试强化学习模式')
@@ -330,7 +337,7 @@ const initStudy = async () => {
         studyType.value = 'enhance'
       }
     }
-    
+
     currentRound.value = response.data.current_round
 
     if (isEnhanceMode) {
@@ -715,11 +722,17 @@ const continueStudy = async () => {
       enhanceWordIds.value = response.data.word_ids
       currentRound.value = response.data.current_round
       studyType.value = 'enhance'
-      
+
+      // 如果后端标记为已完成，直接结束学习
+      if (response.data.is_completed) {
+        await finishStudy()
+        return
+      }
+
       const wordPromises = enhanceWordIds.value.map(id => studyAPI.getWord(id))
       const wordResponses = await Promise.all(wordPromises)
       enhanceWords.value = wordResponses.map(r => r.data)
-      
+
       enhanceIndex.value = 0
       focusInput()
       setTimeout(() => {
@@ -735,6 +748,12 @@ const continueStudy = async () => {
       wordIds.value = response.data.word_ids
       currentRound.value = response.data.current_round
 
+      // 如果后端标记为已完成，直接结束学习
+      if (response.data.is_completed) {
+        await finishStudy()
+        return
+      }
+
       words.value = []
       for (const id of wordIds.value) {
         try {
@@ -746,6 +765,11 @@ const continueStudy = async () => {
       }
 
       if (words.value.length === 0) {
+        // 复习模式下如果没有单词了，说明复习已完成
+        if (isReview) {
+          await finishStudy()
+          return
+        }
         ElMessage.error('没有可学习的单词')
         return
       }
@@ -770,6 +794,12 @@ const startEnhance = async () => {
     const response = await studyAPI.startStudy(groupId.value, false, true)
     enhanceWordIds.value = response.data.word_ids
     currentRound.value = response.data.current_round
+
+    // 如果后端标记为已完成，直接结束学习
+    if (response.data.is_completed) {
+      await finishStudy()
+      return
+    }
 
     enhanceWords.value = []
     for (const id of enhanceWordIds.value) {
