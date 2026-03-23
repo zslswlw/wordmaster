@@ -72,7 +72,7 @@ def get_group_reviews(
     
     result = []
     for plan in plans:
-        is_overdue = plan.original_date < today and plan.status == "pending"
+        is_overdue = plan.review_date < today and plan.status == "pending"
         result.append({
             "plan_id": plan.id,
             "group_id": group_id,
@@ -123,7 +123,7 @@ def get_today_reviews(
         group = db.query(StudyGroup).filter(StudyGroup.id == plan.group_id).first()
         if group:
             bank = db.query(WordBank).filter(WordBank.id == group.bank_id).first()
-            is_overdue = plan.original_date < today
+            is_overdue = plan.review_date < today and plan.status == "pending"
             result.append({
                 "plan_id": plan.id,
                 "group_id": group.id,
@@ -173,7 +173,7 @@ def get_all_reviews(
         group = db.query(StudyGroup).filter(StudyGroup.id == plan.group_id).first()
         if group:
             bank = db.query(WordBank).filter(WordBank.id == group.bank_id).first()
-            is_overdue = plan.original_date < today and plan.status == "pending"
+            is_overdue = plan.review_date < today and plan.status == "pending"
             result.append({
                 "plan_id": plan.id,
                 "group_id": group.id,

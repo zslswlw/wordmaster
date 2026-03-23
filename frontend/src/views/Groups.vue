@@ -106,6 +106,15 @@
               <el-icon><RefreshRight /></el-icon>
               暂无复习
             </el-button>
+            <el-button
+              v-if="row.status === 'completed'"
+              type="primary"
+              size="small"
+              @click="viewReviewProgress(row)"
+            >
+              <el-icon><View /></el-icon>
+              进度
+            </el-button>
             <el-button 
               type="danger" 
               size="small" 
@@ -194,6 +203,15 @@
               >
                 暂无
               </el-button>
+              <el-button
+                v-if="group.status === 'completed'"
+                type="primary"
+                size="small"
+                circle
+                @click="viewReviewProgress(group)"
+              >
+                <el-icon><View /></el-icon>
+              </el-button>
               <el-button 
                 type="danger" 
                 size="small" 
@@ -280,6 +298,27 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 复习进度弹窗 -->
+    <el-dialog
+      v-model="showProgressDialog"
+      title="艾宾浩斯复习进度"
+      :width="isMobile ? '95%' : '800px'"
+      :close-on-click-modal="false"
+      class="progress-dialog"
+    >
+      <ReviewProgress v-if="selectedProgress" :data="selectedProgress" />
+      <template #footer>
+        <el-button @click="showProgressDialog = false">关闭</el-button>
+        <el-button 
+          v-if="selectedGroup && selectedGroup.today_review_status === 'pending'"
+          type="primary" 
+          @click="startReviewFromProgress"
+        >
+          开始复习
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -288,7 +327,8 @@ import { ref, reactive, onMounted, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { bankAPI, groupAPI, reviewAPI } from '../api'
-import { ArrowLeft, Plus, VideoPlay, RefreshRight, Delete } from '@element-plus/icons-vue'
+import { ArrowLeft, Plus, VideoPlay, RefreshRight, Delete, View } from '@element-plus/icons-vue'
+import ReviewProgress from '../components/ReviewProgress.vue'
 
 // 响应式检测
 const isMobile = ref(window.innerWidth <= 768)
@@ -326,10 +366,14 @@ const banks = ref<Bank[]>([])
 const loading = ref(false)
 const showCreateDialog = ref(false)
 const showDeleteDialog = ref(false)
+const showProgressDialog = ref(false)
 const creating = ref(false)
 const deleting = ref(false)
+const loadingProgress = ref(false)
 const formRef = ref()
 const groupToDelete = ref<Group | null>(null)
+const selectedGroup = ref<Group | null>(null)
+const selectedProgress = ref<any>(null)
 const form = reactive({
   bank_id: null as number | null,
   start_seq: 1,
@@ -490,6 +534,36 @@ const handleCreate = async () => {
 
 const startStudy = (groupId: number) => {
   router.push(`/study/${groupId}`)
+}
+
+// 查看复习进度
+const viewReviewProgress = async (group: Group) => {
+  if (group.status !== 'completed') {
+    ElMessage.info('学习组尚未完成学习，暂无复习计划')
+    return
+  }
+  
+  selectedGroup.value = group
+  loadingProgress.value = true
+  showProgressDialog.value = true
+  
+  try {
+    const { data } = await groupAPI.getReviewProgress(group.id)
+    selectedProgress.value = data
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '获取复习进度失败')
+    showProgressDialog.value = false
+  } finally {
+    loadingProgress.value = false
+  }
+}
+
+// 从进度弹窗开始复习
+const startReviewFromProgress = () => {
+  if (selectedGroup.value) {
+    showProgressDialog.value = false
+    goToGroupReview(selectedGroup.value.id)
+  }
 }
 
 const getStatusType = (status: string) => {

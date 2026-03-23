@@ -60,6 +60,7 @@ export const bankAPI = {
 export const groupAPI = {
   getAll: () => api.get('/groups'),
   getById: (id: number) => api.get(`/groups/${id}`),
+  getReviewProgress: (id: number) => api.get(`/groups/${id}/review-progress`),
   create: (data: { name: string; bank_id: number; start_seq: number; end_seq: number }) => api.post('/groups', data),
   update: (id: number, data: { name: string }) => api.put(`/groups/${id}`, data),
   delete: (id: number) => api.delete(`/groups/${id}`)
