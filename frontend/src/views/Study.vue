@@ -641,7 +641,7 @@ const focusInput = () => {
 
 const checkRoundResult = async () => {
   try {
-    const response = await studyAPI.getRoundStats(groupId.value, currentRound.value, studyType.value)
+    const response = await studyAPI.getRoundStats(groupId.value, currentRound.value, studyType.value, planId.value || undefined)
     const data = response.data
     
     const currentStats = data.current_round_stats || { correct: 0, wrong: 0, total: 0 }

@@ -73,8 +73,12 @@ export const studyAPI = {
   },
   getWord: (wordId: number) => api.get(`/study/word/${wordId}`),
   checkAnswer: (data: { group_id: number; word_id: number; user_input: string; round: number; study_type: string; plan_id?: number }) => api.post('/study/check', data),
-  getRoundStats: (groupId: number, currentRound?: number, studyType?: string) => 
-    api.get(`/study/round/${groupId}?study_type=${studyType || 'new'}${currentRound ? `&current_round=${currentRound}` : ''}`),
+  getRoundStats: (groupId: number, currentRound?: number, studyType?: string, planId?: number) => {
+    let url = `/study/round/${groupId}?study_type=${studyType || 'new'}`
+    if (currentRound) url += `&current_round=${currentRound}`
+    if (planId) url += `&plan_id=${planId}`
+    return api.get(url)
+  },
   getEnhanceStats: (groupId: number, currentRound?: number) => 
     api.get(`/study/round/${groupId}?study_type=enhance${currentRound ? `&current_round=${currentRound}` : ''}`),
   completeStudy: (groupId: number, isEnhance: boolean, studyType: string, planId?: number) => {
