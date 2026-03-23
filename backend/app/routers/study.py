@@ -54,9 +54,11 @@ def start_study(
         StudyRecord.study_type == query_study_type
     )
     
-    # 如果提供了plan_id，只查询该复习计划的记录
+    # 如果提供了plan_id，只查询该复习计划的记录；否则只查询plan_id为null的记录（避免数据污染）
     if plan_id:
         records_query = records_query.filter(StudyRecord.plan_id == plan_id)
+    else:
+        records_query = records_query.filter(StudyRecord.plan_id == None)
     
     existing_records = records_query.all()
     
@@ -161,8 +163,11 @@ def complete_round(
         query = db.query(StudyRecord).filter(StudyRecord.group_id == group_id)
         if study_type:
             query = query.filter(StudyRecord.study_type == study_type)
+        # 如果提供了plan_id，只查询该复习计划的记录；否则只查询plan_id为null的记录
         if plan_id:
             query = query.filter(StudyRecord.plan_id == plan_id)
+        else:
+            query = query.filter(StudyRecord.plan_id == None)
         
         records = query.all()
         
@@ -284,10 +289,12 @@ def get_round_stats(
     else:
         query = query.filter(StudyRecord.study_type == "new")
     
-    # 如果指定了复习计划ID，进行过滤
+    # 如果指定了复习计划ID，进行过滤；否则只查询plan_id为null的记录
     if plan_id:
         query = query.filter(StudyRecord.plan_id == plan_id)
-    
+    else:
+        query = query.filter(StudyRecord.plan_id == None)
+
     records = query.all()
     
     if not records:

@@ -320,10 +320,9 @@ const initStudy = async () => {
     let response = await studyAPI.startStudy(groupId.value, isReview, false, planId.value || undefined)
     let isEnhanceMode = false
 
-    // 如果后端标记为已完成，直接结束学习
+    // 如果后端标记为已完成，调用完成流程
     if (response.data.is_completed) {
-      ElMessage.success('该学习组已完成学习！')
-      router.push('/groups')
+      await finishStudy()
       return
     }
 
