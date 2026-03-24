@@ -865,9 +865,15 @@ onMounted(() => {
     // 播放发音快捷键：空格键
     // 触发时机：答案已提交后、按 Enter 进入下一个词之前
     // 此时输入框已禁用，不会与输入冲突
-    if (e.key === ' ' && answerSubmitted.value && !showRoundResult.value) {
+    if (e.key === ' ') {
+      // 在答案提交后的窗口期，阻止默认行为并播放发音
+      if (answerSubmitted.value && !showRoundResult.value) {
+        e.preventDefault()
+        playPronunciation()
+        return
+      }
+      // 其他情况下也阻止空格键滚动页面（因为我们用不到页面滚动）
       e.preventDefault()
-      playPronunciation()
       return
     }
     
