@@ -104,7 +104,7 @@
         <p class="keyboard-hint" v-if="!isMobile">
           <span class="key-badge">Enter</span> 继续
           <span class="key-divider">|</span>
-          <span class="key-badge">Ctrl</span> + <span class="key-badge">P</span> 发音
+          <span class="key-badge">Space</span> 重播
         </p>
       </div>
     </el-card>
@@ -862,9 +862,10 @@ onMounted(() => {
   window.addEventListener('popstate', handleBackButton)
   
   window.addEventListener('keydown', (e) => {
-    // 播放发音快捷键：Ctrl+P 或 Cmd+P (Mac)
-    // 选择 Ctrl+P 因为：1. 不会与输入冲突 2. 容易记忆 (P = Play/Pronunciation)
-    if ((e.ctrlKey || e.metaKey) && e.key === 'p' && !answerSubmitted.value) {
+    // 播放发音快捷键：空格键
+    // 触发时机：答案已提交后、按 Enter 进入下一个词之前
+    // 此时输入框已禁用，不会与输入冲突
+    if (e.key === ' ' && answerSubmitted.value && !showRoundResult.value) {
       e.preventDefault()
       playPronunciation()
       return
