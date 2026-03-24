@@ -62,6 +62,12 @@ def get_study_words(
                 prev_wrong_ids.add(record.word_id)
         target_word_ids = list(prev_wrong_ids) if prev_wrong_ids else []
     
+    # 特殊处理：如果当前轮次是第2轮且没有任何记录，应该是从第1轮的错误单词开始
+    # 这种情况发生在第1轮刚完成，要进入第2轮时
+    if max_round == 1 and not current_round_records:
+        # 第1轮已完成，准备进入第2轮，应该学习第1轮的错误单词
+        target_word_ids = list(current_wrong_ids) if current_wrong_ids else []
+    
     # 判断当前轮次是否已完成
     is_current_round_complete = (
         len(current_round_records) >= len(target_word_ids) and max_round > 0
