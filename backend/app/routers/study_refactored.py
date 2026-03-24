@@ -46,11 +46,11 @@ def get_study_words(
             current_wrong_ids.add(record.word_id)
     
     # 确定当前轮次应该学习的单词列表
-    # 判断是否是新开始（没有记录或当前轮次就是第1轮且没有完成）
-    is_new_start = max_round == 0 or (max_round == 1 and not current_round_records)
-
-    if is_new_start:
-        # 第1轮：学习全部单词
+    if max_round == 0:
+        # 全新开始：第1轮学习全部单词
+        target_word_ids = all_word_ids
+    elif max_round == 1:
+        # 第1轮进行中或刚完成：学习全部单词
         target_word_ids = all_word_ids
     else:
         # 第2轮及以后：只学习上一轮的错误单词
