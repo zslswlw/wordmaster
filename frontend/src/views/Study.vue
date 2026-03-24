@@ -101,7 +101,11 @@
         <el-button type="primary" size="large" @click="handleNext" autofocus class="next-btn">
           {{ isLastWord ? '查看结果' : '下一个' }} <el-icon><ArrowRight /></el-icon>
         </el-button>
-        <p class="keyboard-hint" v-if="!isMobile">按 Enter 键继续</p>
+        <p class="keyboard-hint" v-if="!isMobile">
+          <span class="key-badge">Enter</span> 继续
+          <span class="key-divider">|</span>
+          <span class="key-badge">Ctrl</span> + <span class="key-badge">P</span> 发音
+        </p>
       </div>
     </el-card>
 
@@ -858,6 +862,14 @@ onMounted(() => {
   window.addEventListener('popstate', handleBackButton)
   
   window.addEventListener('keydown', (e) => {
+    // 播放发音快捷键：Ctrl+P 或 Cmd+P (Mac)
+    // 选择 Ctrl+P 因为：1. 不会与输入冲突 2. 容易记忆 (P = Play/Pronunciation)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'p' && !answerSubmitted.value) {
+      e.preventDefault()
+      playPronunciation()
+      return
+    }
+    
     if (e.key === 'Enter') {
       if (showRoundResult.value) {
         if (nextStep.value === 'continue') {
@@ -1222,6 +1234,30 @@ watch(userInput, () => {
   margin-top: 12px;
   color: #909399;
   font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+
+  .key-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 8px;
+    background: #f5f7fa;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #606266;
+    font-family: monospace;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1);
+  }
+
+  .key-divider {
+    color: #c0c4cc;
+    margin: 0 4px;
+  }
 }
 
 .round-result {
