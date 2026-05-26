@@ -13,6 +13,8 @@ const { deviceType, orientation } = useResponsive()
 </script>
 
 <style lang="scss">
+@import './styles/aesthetic.css';
+
 * {
   margin: 0;
   padding: 0;
@@ -20,19 +22,20 @@ const { deviceType, orientation } = useResponsive()
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 #app {
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--color-bg-base);
 }
 
 .app-container {
+  min-height: 100vh;
+
   &.mobile {
-    // 移动端优化
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
     user-select: none;
@@ -46,22 +49,24 @@ body {
     margin: 10vh auto !important;
     max-height: 80vh;
     overflow-y: auto;
+    border-radius: var(--radius-xl) !important;
   }
-  
+
   .el-message-box {
     width: 90% !important;
+    border-radius: var(--radius-lg) !important;
   }
-  
+
   .el-table {
     font-size: 14px;
   }
-  
+
   .el-form-item__label {
     font-size: 14px;
   }
-  
+
   .el-input__inner {
-    font-size: 16px; // 防止 iOS 缩放
+    font-size: 16px;
   }
 }
 

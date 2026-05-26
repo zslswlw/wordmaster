@@ -1,18 +1,19 @@
 <template>
   <div class="groups-container" :class="{ mobile: isMobile }">
-    <el-card>
+    <el-card class="main-card">
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <el-button @click="goBack" circle :size="isMobile ? 'small' : 'default'">
+            <el-button @click="goBack" circle :size="isMobile ? 'small' : 'default'" class="back-btn">
               <el-icon><ArrowLeft /></el-icon>
             </el-button>
-            <span class="title">学习组管理</span>
+            <h3 class="title">学习组管理</h3>
           </div>
-          <el-button 
-            type="primary" 
+          <el-button
+            type="primary"
             @click="openCreateDialog"
             :size="isMobile ? 'small' : 'default'"
+            class="create-btn"
           >
             <el-icon><Plus /></el-icon>
             <span v-if="!isMobile">创建学习组</span>
@@ -20,117 +21,139 @@
           </el-button>
         </div>
       </template>
-      
+
       <div v-if="groups.length === 0" class="empty-state">
-        <el-empty description="暂无学习组，请先创建">
-          <el-button type="primary" @click="openCreateDialog">
-            创建学习组
-          </el-button>
-        </el-empty>
+        <div class="empty-icon">
+          <el-icon :size="64"><FolderOpened /></el-icon>
+        </div>
+        <h4>暂无学习组</h4>
+        <p>创建您的第一个学习组开始背单词吧</p>
+        <el-button type="primary" @click="openCreateDialog" class="empty-btn">
+          创建学习组
+        </el-button>
       </div>
-      
+
       <!-- 桌面端表格 -->
-      <el-table 
-        v-else-if="!isMobile" 
-        :data="groups" 
-        style="width: 100%" 
+      <el-table
+        v-else-if="!isMobile"
+        :data="groups"
+        style="width: 100%"
         v-loading="loading"
+        class="groups-table"
       >
-        <el-table-column type="index" label="序号" width="60" />
-        <el-table-column prop="name" label="组名称" min-width="180" />
-        <el-table-column label="单词范围" width="120">
+        <el-table-column type="index" label="序号" width="70">
+          <template #default="{ $index }">
+            <span class="index-badge">{{ $index + 1 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="组名称" min-width="180">
           <template #default="{ row }">
-            {{ row.start_seq }} - {{ row.end_seq }}
+            <div class="group-name-cell">
+              <span class="group-name">{{ row.name }}</span>
+              <span class="word-count">{{ row.end_seq - row.start_seq + 1 }} 词</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="单词范围" width="140">
+          <template #default="{ row }">
+            <span class="range-text">{{ row.start_seq }} - {{ row.end_seq }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)">
+            <el-tag :type="getStatusType(row.status)" :class="['status-tag', row.status]">
               {{ getStatusText(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间" width="160">
           <template #default="{ row }">
-            {{ formatDate(row.created_at) }}
+            <span class="date-text">{{ formatDate(row.created_at) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="今日复习" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.today_review_status === 'completed'" type="success">
+            <el-tag v-if="row.today_review_status === 'completed'" type="success" class="review-tag">
               已完成
             </el-tag>
-            <el-tag v-else-if="row.today_review_status === 'pending'" type="warning">
+            <el-tag v-else-if="row.today_review_status === 'pending'" type="warning" class="review-tag">
               待复习
             </el-tag>
-            <el-tag v-else type="info">
+            <el-tag v-else type="info" class="review-tag">
               无计划
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
-            <el-button 
-              v-if="row.status !== 'completed'" 
-              type="primary" 
-              size="small" 
-              @click="startStudy(row.id)"
-            >
-              <el-icon><VideoPlay /></el-icon>
-              学习
-            </el-button>
-            <el-button 
-              v-else-if="row.today_review_status === 'pending'"
-              type="success" 
-              size="small" 
-              @click="goToGroupReview(row.id)"
-            >
-              <el-icon><RefreshRight /></el-icon>
-              复习
-            </el-button>
-            <el-button 
-              v-else-if="row.today_review_status === 'completed'"
-              type="info" 
-              size="small" 
-              disabled
-            >
-              <el-icon><RefreshRight /></el-icon>
-              今日已复习
-            </el-button>
-            <el-button 
-              v-else
-              type="info" 
-              size="small" 
-              disabled
-            >
-              <el-icon><RefreshRight /></el-icon>
-              暂无复习
-            </el-button>
-            <el-button
-              v-if="row.status === 'completed'"
-              type="primary"
-              size="small"
-              @click="viewReviewProgress(row)"
-            >
-              <el-icon><View /></el-icon>
-              进度
-            </el-button>
-            <el-button 
-              type="danger" 
-              size="small" 
-              @click="confirmDelete(row)"
-            >
-              <el-icon><Delete /></el-icon>
-              删除
-            </el-button>
+            <div class="action-buttons">
+              <el-button
+                v-if="row.status !== 'completed'"
+                type="primary"
+                size="small"
+                @click="startStudy(row.id)"
+                class="action-btn study"
+              >
+                <el-icon><VideoPlay /></el-icon>
+                学习
+              </el-button>
+              <el-button
+                v-else-if="row.today_review_status === 'pending'"
+                type="success"
+                size="small"
+                @click="goToGroupReview(row.id)"
+                class="action-btn review"
+              >
+                <el-icon><RefreshRight /></el-icon>
+                复习
+              </el-button>
+              <el-button
+                v-else-if="row.today_review_status === 'completed'"
+                type="info"
+                size="small"
+                disabled
+                class="action-btn"
+              >
+                <el-icon><RefreshRight /></el-icon>
+                今日已复习
+              </el-button>
+              <el-button
+                v-else
+                type="info"
+                size="small"
+                disabled
+                class="action-btn"
+              >
+                <el-icon><RefreshRight /></el-icon>
+                暂无复习
+              </el-button>
+              <el-button
+                v-if="row.status === 'completed'"
+                type="default"
+                size="small"
+                @click="viewReviewProgress(row)"
+                class="action-btn"
+              >
+                <el-icon><View /></el-icon>
+                进度
+              </el-button>
+              <el-button
+                type="danger"
+                size="small"
+                @click="confirmDelete(row)"
+                class="action-btn delete"
+              >
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
 
       <!-- 移动端卡片列表 -->
       <div v-else class="mobile-list" v-loading="loading">
-        <div 
-          v-for="(group, index) in groups" 
+        <div
+          v-for="(group, index) in groups"
           :key="group.id"
           class="mobile-card"
         >
@@ -141,24 +164,24 @@
                 <h4 class="group-name">{{ group.name }}</h4>
                 <div class="group-meta">
                   <span class="word-range">{{ group.start_seq }} - {{ group.end_seq }}</span>
-                  <el-tag :type="getStatusType(group.status)" size="small">
+                  <el-tag :type="getStatusType(group.status)" size="small" :class="['status-tag', group.status]">
                     {{ getStatusText(group.status) }}
                   </el-tag>
                 </div>
               </div>
             </div>
             <div class="review-status">
-              <el-tag 
-                v-if="group.today_review_status === 'completed'" 
-                type="success" 
+              <el-tag
+                v-if="group.today_review_status === 'completed'"
+                type="success"
                 size="small"
                 effect="dark"
               >
                 已复习
               </el-tag>
-              <el-tag 
-                v-else-if="group.today_review_status === 'pending'" 
-                type="warning" 
+              <el-tag
+                v-else-if="group.today_review_status === 'pending'"
+                type="warning"
                 size="small"
                 effect="dark"
               >
@@ -169,52 +192,52 @@
           <div class="card-footer">
             <span class="create-time">{{ formatDate(group.created_at) }}</span>
             <div class="card-actions">
-              <el-button 
-                v-if="group.status !== 'completed'" 
-                type="primary" 
-                size="small" 
+              <el-button
+                v-if="group.status !== 'completed'"
+                type="primary"
+                size="small"
                 @click="startStudy(group.id)"
               >
                 <el-icon><VideoPlay /></el-icon>
                 学习
               </el-button>
-              <el-button 
+              <el-button
                 v-else-if="group.today_review_status === 'pending'"
-                type="success" 
-                size="small" 
+                type="success"
+                size="small"
                 @click="goToGroupReview(group.id)"
               >
                 <el-icon><RefreshRight /></el-icon>
                 复习
               </el-button>
-              <el-button 
+              <el-button
                 v-else-if="group.today_review_status === 'completed'"
-                type="info" 
-                size="small" 
+                type="info"
+                size="small"
                 disabled
               >
                 已复习
               </el-button>
-              <el-button 
+              <el-button
                 v-else
-                type="info" 
-                size="small" 
+                type="info"
+                size="small"
                 disabled
               >
                 暂无
               </el-button>
               <el-button
                 v-if="group.status === 'completed'"
-                type="primary"
+                type="default"
                 size="small"
                 circle
                 @click="viewReviewProgress(group)"
               >
                 <el-icon><View /></el-icon>
               </el-button>
-              <el-button 
-                type="danger" 
-                size="small" 
+              <el-button
+                type="danger"
+                size="small"
                 circle
                 @click="confirmDelete(group)"
               >
@@ -226,13 +249,15 @@
       </div>
     </el-card>
 
-    <el-dialog 
-      v-model="showCreateDialog" 
-      title="创建学习组" 
-      :width="isMobile ? '90%' : '500px'"
+    <!-- 创建学习组对话框 -->
+    <el-dialog
+      v-model="showCreateDialog"
+      title="创建学习组"
+      :width="isMobile ? '90%' : '480px'"
       :close-on-click-modal="false"
+      class="create-dialog"
     >
-      <el-form :model="form" label-width="100px" ref="formRef" :rules="formRules">
+      <el-form :model="form" label-width="90px" ref="formRef" :rules="formRules" class="create-form">
         <el-form-item label="选择词库" prop="bank_id">
           <el-select v-model="form.bank_id" placeholder="请选择词库" style="width: 100%">
             <el-option
@@ -244,56 +269,52 @@
           </el-select>
         </el-form-item>
         <el-form-item label="起始序号" prop="start_seq">
-          <el-input-number 
-            v-model="form.start_seq" 
-            :min="1" 
+          <el-input-number
+            v-model="form.start_seq"
+            :min="1"
             :max="maxSeq"
             style="width: 100%"
           />
         </el-form-item>
         <el-form-item label="结束序号" prop="end_seq">
-          <el-input-number 
-            v-model="form.end_seq" 
-            :min="1" 
+          <el-input-number
+            v-model="form.end_seq"
+            :min="1"
             :max="maxSeq"
             style="width: 100%"
           />
         </el-form-item>
         <el-form-item v-if="selectedBank">
-          <el-alert 
-            :title="`已选择词库: ${selectedBank.name}，共 ${selectedBank.word_count} 个单词`"
-            type="info"
-            :closable="false"
-          />
+          <div class="bank-info">
+            <el-icon><InfoFilled /></el-icon>
+            <span>已选择词库: <strong>{{ selectedBank.name }}</strong>，共 <strong>{{ selectedBank.word_count }}</strong> 个单词</span>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="showCreateDialog = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="handleCreate">
+        <el-button @click="showCreateDialog = false" size="large">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="handleCreate" size="large">
           创建
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog 
-      v-model="showDeleteDialog" 
-      title="确认删除" 
+    <!-- 删除确认对话框 -->
+    <el-dialog
+      v-model="showDeleteDialog"
+      title="确认删除"
       :width="isMobile ? '90%' : '400px'"
       :close-on-click-modal="false"
     >
-      <el-alert 
-        title="删除后无法恢复"
-        type="warning"
-        :closable="false"
-        style="margin-bottom: 15px"
-      />
-      <p>确定要删除学习组 "{{ groupToDelete?.name }}" 吗？</p>
-      <p style="color: #999; font-size: 12px; margin-top: 10px;">
-        同时会删除相关的学习计划和学习记录
-      </p>
+      <div class="delete-warning">
+        <el-icon :size="48" color="var(--color-warning)"><Warning /></el-icon>
+        <p class="delete-title">删除后无法恢复</p>
+        <p class="delete-desc">确定要删除学习组 "{{ groupToDelete?.name }}" 吗？</p>
+        <p class="delete-hint">同时会删除相关的学习计划和学习记录</p>
+      </div>
       <template #footer>
-        <el-button @click="showDeleteDialog = false">取消</el-button>
-        <el-button type="danger" :loading="deleting" @click="handleDelete">
+        <el-button @click="showDeleteDialog = false" size="large">取消</el-button>
+        <el-button type="danger" :loading="deleting" @click="handleDelete" size="large">
           删除
         </el-button>
       </template>
@@ -309,11 +330,12 @@
     >
       <ReviewProgress v-if="selectedProgress" :data="selectedProgress" />
       <template #footer>
-        <el-button @click="showProgressDialog = false">关闭</el-button>
-        <el-button 
+        <el-button @click="showProgressDialog = false" size="large">关闭</el-button>
+        <el-button
           v-if="selectedGroup && selectedGroup.today_review_status === 'pending'"
-          type="primary" 
+          type="primary"
           @click="startReviewFromProgress"
+          size="large"
         >
           开始复习
         </el-button>
@@ -327,10 +349,9 @@ import { ref, reactive, onMounted, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { bankAPI, groupAPI, reviewAPI } from '../api'
-import { ArrowLeft, Plus, VideoPlay, RefreshRight, Delete, View } from '@element-plus/icons-vue'
+import { ArrowLeft, Plus, VideoPlay, RefreshRight, Delete, View, FolderOpened, Warning, InfoFilled } from '@element-plus/icons-vue'
 import ReviewProgress from '../components/ReviewProgress.vue'
 
-// 响应式检测
 const isMobile = ref(window.innerWidth <= 768)
 const handleResize = () => {
   isMobile.value = window.innerWidth <= 768
@@ -397,15 +418,12 @@ const maxSeq = computed(() => {
 
 watch(() => form.bank_id, (newVal, oldVal) => {
   if (newVal && oldVal) {
-    // 只有切换词库时才调整，且只在当前值超出新词库范围时调整
     const banksList = Array.isArray(banks.value) ? banks.value : []
     const bank = banksList.find(b => b.id === newVal)
     if (bank) {
-      // 如果当前结束序号超出新词库范围，则调整到词库最大值
       if (form.end_seq > bank.word_count) {
         form.end_seq = bank.word_count
       }
-      // 如果起始序号超出新词库范围，则调整到1
       if (form.start_seq > bank.word_count) {
         form.start_seq = 1
       }
@@ -471,7 +489,7 @@ const confirmDelete = (group: Group) => {
 
 const handleDelete = async () => {
   if (!groupToDelete.value) return
-  
+
   deleting.value = true
   try {
     await groupAPI.delete(groupToDelete.value.id)
@@ -508,13 +526,13 @@ const handleCreate = async () => {
     ElMessage.warning('起始序号不能大于结束序号')
     return
   }
-  
+
   const bank = banks.value.find(b => b.id === form.bank_id)
   if (bank && form.end_seq > bank.word_count) {
     ElMessage.warning(`结束序号不能超过词库最大序号 ${bank.word_count}`)
     return
   }
-  
+
   creating.value = true
   try {
     await groupAPI.create({
@@ -536,17 +554,16 @@ const startStudy = (groupId: number) => {
   router.push(`/study/${groupId}`)
 }
 
-// 查看复习进度
 const viewReviewProgress = async (group: Group) => {
   if (group.status !== 'completed') {
     ElMessage.info('学习组尚未完成学习，暂无复习计划')
     return
   }
-  
+
   selectedGroup.value = group
   loadingProgress.value = true
   showProgressDialog.value = true
-  
+
   try {
     const { data } = await groupAPI.getReviewProgress(group.id)
     selectedProgress.value = data
@@ -558,7 +575,6 @@ const viewReviewProgress = async (group: Group) => {
   }
 }
 
-// 从进度弹窗开始复习
 const startReviewFromProgress = () => {
   if (selectedGroup.value) {
     showProgressDialog.value = false
@@ -591,13 +607,32 @@ const formatDate = (dateStr: string) => {
 }
 </script>
 
-<style scoped>
+<style scoped lang="scss">
 .groups-container {
   padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
 .groups-container.mobile {
   padding: 12px;
+}
+
+.main-card {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--color-border-light);
+  overflow: hidden;
+
+  :deep(.el-card__header) {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--color-border-light);
+    background: var(--color-bg-muted);
+  }
+
+  :deep(.el-card__body) {
+    padding: 0;
+  }
 }
 
 .card-header {
@@ -606,46 +641,212 @@ const formatDate = (dateStr: string) => {
   align-items: center;
 }
 
-.groups-container.mobile .card-header {
-  padding: 8px 0;
-}
-
 .header-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.groups-container.mobile .header-left {
-  gap: 8px;
+.back-btn {
+  background: var(--color-bg-paper);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+
+  &:hover {
+    background: var(--color-bg-muted);
+    color: var(--color-text-primary);
+  }
 }
 
 .title {
-  font-size: 18px;
-  font-weight: bold;
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
 }
 
-.groups-container.mobile .title {
-  font-size: 16px;
+.create-btn {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  border: none;
+  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.25);
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(var(--color-primary-rgb), 0.35);
+  }
 }
 
+/* 空状态 */
 .empty-state {
   padding: 60px 20px;
+  text-align: center;
 }
 
-/* 移动端卡片列表样式 */
+.empty-icon {
+  width: 100px;
+  height: 100px;
+  margin: 0 auto 20px;
+  background: var(--color-bg-muted);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-light);
+}
+
+.empty-state h4 {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  margin-bottom: 24px;
+}
+
+.empty-btn {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  border: none;
+}
+
+/* 桌面端表格 */
+.groups-table {
+  :deep(.el-table__header th) {
+    background: var(--color-bg-muted) !important;
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+
+  :deep(.el-table__row) {
+    transition: background var(--transition-fast);
+
+    &:hover > td {
+      background: var(--color-bg-muted) !important;
+    }
+  }
+}
+
+.index-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  color: white;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.group-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.group-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.word-count {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.range-text {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+.date-text {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.status-tag {
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  padding: 2px 10px;
+
+  &.new {
+    background: rgba(74, 126, 184, 0.1);
+    color: var(--color-info);
+    border-color: transparent;
+  }
+
+  &.learning {
+    background: rgba(212, 134, 12, 0.1);
+    color: var(--color-warning);
+    border-color: transparent;
+  }
+
+  &.completed {
+    background: rgba(45, 138, 94, 0.1);
+    color: var(--color-success);
+    border-color: transparent;
+  }
+}
+
+.review-tag {
+  border-radius: var(--radius-full);
+  font-size: 0.6875rem;
+  padding: 2px 8px;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.action-btn {
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+
+  &.study {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+    border: none;
+    color: white;
+  }
+
+  &.review {
+    background: linear-gradient(135deg, var(--color-success) 0%, #3dd477 100%);
+    border: none;
+    color: white;
+  }
+
+  &.delete {
+    background: transparent;
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+
+    &:hover {
+      background: var(--color-danger);
+      color: white;
+    }
+  }
+}
+
+/* 移动端列表 */
 .mobile-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding: 16px;
 }
 
 .mobile-card {
-  background: #fff;
-  border-radius: 12px;
+  background: var(--color-bg-paper);
+  border-radius: var(--radius-lg);
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  border: 1px solid #ebeef5;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-border-light);
 }
 
 .card-header-row {
@@ -665,13 +866,13 @@ const formatDate = (dateStr: string) => {
 .group-index {
   width: 28px;
   height: 28px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
   color: white;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: bold;
   flex-shrink: 0;
 }
@@ -682,9 +883,9 @@ const formatDate = (dateStr: string) => {
 }
 
 .group-name {
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: 600;
-  color: #303133;
+  color: var(--color-text-primary);
   margin: 0 0 8px 0;
   line-height: 1.4;
 }
@@ -697,11 +898,11 @@ const formatDate = (dateStr: string) => {
 }
 
 .word-range {
-  font-size: 13px;
-  color: #606266;
-  background: #f5f7fa;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  background: var(--color-bg-muted);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .review-status {
@@ -713,17 +914,69 @@ const formatDate = (dateStr: string) => {
   justify-content: space-between;
   align-items: center;
   padding-top: 12px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid var(--color-border-light);
 }
 
 .create-time {
-  font-size: 12px;
-  color: #909399;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
 }
 
 .card-actions {
   display: flex;
   gap: 8px;
+}
+
+/* 创建表单 */
+.create-form {
+  :deep(.el-form-item__label) {
+    font-weight: 500;
+    color: var(--color-text-secondary);
+  }
+}
+
+.bank-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: rgba(var(--color-primary-rgb), 0.05);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+
+  .el-icon {
+    color: var(--color-primary);
+  }
+
+  strong {
+    color: var(--color-text-primary);
+  }
+}
+
+/* 删除确认 */
+.delete-warning {
+  text-align: center;
+  padding: 20px 0;
+}
+
+.delete-title {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 16px 0 8px;
+}
+
+.delete-desc {
+  color: var(--color-text-secondary);
+  font-size: 0.9375rem;
+  margin-bottom: 8px;
+}
+
+.delete-hint {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
 }
 
 /* 横屏适配 */
@@ -735,20 +988,20 @@ const formatDate = (dateStr: string) => {
   }
 }
 
-/* 小屏幕手机适配 */
+/* 小屏幕手机 */
 @media (max-width: 375px) {
   .groups-container.mobile {
     padding: 8px;
   }
-  
+
   .mobile-card {
     padding: 12px;
   }
-  
+
   .group-name {
-    font-size: 15px;
+    font-size: 0.9375rem;
   }
-  
+
   .card-actions {
     gap: 4px;
   }

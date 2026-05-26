@@ -1,41 +1,58 @@
 <template>
   <div class="study-container">
-    <el-card class="word-card">
-      <template #header>
-        <div class="header">
-          <el-button @click="showQuitConfirm = true" circle size="small">
-            <el-icon><ArrowLeft /></el-icon>
-          </el-button>
-          <div class="title-section">
-            <h2>{{ studyModeTitle }}</h2>
-            <div class="progress-bar">
-              <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
-            </div>
-            <p class="progress-text">{{ currentWordIndex }} / {{ totalWords }}</p>
-          </div>
-          <div class="placeholder"></div>
+    <!-- 顶部进度条 -->
+    <div class="study-header animate-fade-in">
+      <div class="header-top">
+        <el-button @click="showQuitConfirm = true" circle class="back-btn">
+          <el-icon><ArrowLeft /></el-icon>
+        </el-button>
+        <div class="title-section">
+          <h2>{{ studyModeTitle }}</h2>
+          <span class="round-badge" v-if="currentRound > 1">第 {{ currentRound }} 轮</span>
         </div>
-      </template>
+        <div class="progress-info">
+          <span class="progress-text">{{ currentWordIndex }} / {{ totalWords }}</span>
+        </div>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+      </div>
+    </div>
 
-      <div class="word-content">
-        <h3 class="meaning">{{ currentWord?.meaning }}</h3>
-        <p class="phonetic">{{ currentWord?.phonetic }}</p>
-        
-        <div class="pronunciation-section">
-          <button 
-            class="sound-btn" 
-            :class="{ playing: isPlaying }"
-            @click="playPronunciation"
-          >
-            <el-icon :size="isMobile ? 28 : 32"><VideoPlay /></el-icon>
-          </button>
-          <div class="sound-hint">点击播放发音</div>
+    <!-- 单词卡片 -->
+    <div class="word-card animate-fade-in-up delay-1">
+      <div class="card-decoration">
+        <div class="deco-circle"></div>
+        <div class="deco-circle"></div>
+      </div>
+
+      <div class="word-display">
+        <div class="meaning-text">{{ currentWord?.meaning }}</div>
+        <div class="phonetic-text" v-if="currentWord?.phonetic">
+          <span class="phonetic-label">音标</span>
+          <span class="phonetic-value">{{ currentWord.phonetic }}</span>
         </div>
       </div>
 
-      <div class="input-section">
-        <!-- 可见的输入框 - 移动端友好 -->
-        <div v-if="!answerSubmitted" class="input-wrapper">
+      <div class="pronunciation-section">
+        <button
+          class="sound-btn"
+          :class="{ playing: isPlaying }"
+          @click="playPronunciation"
+        >
+          <el-icon :size="28"><VideoPlay /></el-icon>
+          <span class="sound-wave" v-if="isPlaying"></span>
+          <span class="sound-wave delay-1" v-if="isPlaying"></span>
+          <span class="sound-wave delay-2" v-if="isPlaying"></span>
+        </button>
+        <span class="sound-hint">点击播放发音</span>
+      </div>
+    </div>
+
+    <!-- 输入区域 -->
+    <div class="input-section animate-fade-in-up delay-2">
+      <div v-if="!answerSubmitted" class="input-area">
+        <div class="input-wrapper">
           <input
             ref="inputRef"
             v-model="userInput"
@@ -51,93 +68,135 @@
             inputmode="text"
             placeholder="输入单词..."
           />
-          <!-- 清除按钮 -->
-          <button 
-            v-if="userInput" 
-            class="clear-btn" 
+          <button
+            v-if="userInput"
+            class="clear-btn"
             @click="clearInput"
             type="button"
           >
             <el-icon><CircleClose /></el-icon>
           </button>
         </div>
-        <!-- 提交按钮 -->
-        <div v-if="!answerSubmitted" class="submit-area">
-          <el-button 
-            type="primary" 
-            size="large" 
-            @click="handleSubmit"
-            :loading="submitting"
-            :disabled="!userInput.trim()"
-            class="submit-btn"
-          >
-            提交
-          </el-button>
-        </div>
+
+        <el-button
+          type="primary"
+          size="large"
+          @click="handleSubmit"
+          :loading="submitting"
+          :disabled="!userInput.trim()"
+          class="submit-btn"
+        >
+          提交答案
+        </el-button>
       </div>
 
+      <!-- 结果区域 -->
       <div v-if="answerSubmitted" class="result-area">
         <div :class="['result-box', lastResult?.correct ? 'correct' : 'wrong']">
-          <div class="result-content">
-            <el-icon :size="isMobile ? 32 : 40" v-if="lastResult?.correct"><CircleCheck /></el-icon>
-            <el-icon :size="isMobile ? 32 : 40" v-else><CircleClose /></el-icon>
-            <span class="result-text">{{ lastResult?.correct ? '回答正确!' : '回答错误' }}</span>
+          <div class="result-icon">
+            <el-icon :size="40" v-if="lastResult?.correct"><CircleCheck /></el-icon>
+            <el-icon :size="40" v-else><CircleClose /></el-icon>
           </div>
-          
-          <!-- 答案对比区域 -->
+          <div class="result-text">
+            {{ lastResult?.correct ? '回答正确!' : '回答错误' }}
+          </div>
+
           <div class="answer-comparison">
             <div class="answer-row">
               <span class="answer-label">你的答案</span>
-              <span :class="['answer-value', 'user-answer', lastResult?.correct ? 'correct-text' : 'wrong-text']">
+              <span :class="['answer-value', 'user-answer', lastResult?.correct ? 'correct' : 'wrong']">
                 {{ lastResult?.user_answer || '-' }}
               </span>
             </div>
             <div class="answer-row">
               <span class="answer-label">正确答案</span>
-              <span class="answer-value correct-text">{{ lastResult?.correct_answer }}</span>
+              <span class="answer-value correct">{{ lastResult?.correct_answer }}</span>
             </div>
           </div>
         </div>
-        <el-button type="primary" size="large" @click="handleNext" autofocus class="next-btn">
-          {{ isLastWord ? '查看结果' : '下一个' }} <el-icon><ArrowRight /></el-icon>
+
+        <el-button
+          type="primary"
+          size="large"
+          @click="handleNext"
+          autofocus
+          class="next-btn"
+        >
+          {{ isLastWord ? '查看结果' : '下一个' }}
+          <el-icon><ArrowRight /></el-icon>
         </el-button>
-        <p class="keyboard-hint" v-if="!isMobile">
-          <span class="key-badge">Enter</span> 继续
-          <span class="key-divider">|</span>
-          <span class="key-badge">Space</span> 重播
-        </p>
+
+        <div class="keyboard-hint" v-if="!isMobile">
+          <span class="key"><span class="key-label">Enter</span> 继续</span>
+          <span class="key-divider"></span>
+          <span class="key"><span class="key-label">Space</span> 重播发音</span>
+        </div>
       </div>
-    </el-card>
+    </div>
 
     <!-- 轮次结束对话框 -->
-    <el-dialog 
-      v-model="showRoundResult" 
-      :title="roundResultTitle" 
-      :width="isMobile ? '90%' : '400px'"
+    <el-dialog
+      v-model="showRoundResult"
+      :title="roundResultTitle"
+      :width="isMobile ? '90%' : '420px'"
       :close-on-click-modal="false"
       :show-close="false"
       class="round-dialog"
     >
       <div class="round-result">
-        <el-icon :size="isMobile ? 48 : 60" :class="roundResultIconClass">
-          <component :is="roundResultIcon" />
-        </el-icon>
+        <div :class="['result-icon-large', roundResultIconClass]">
+          <el-icon :size="48"><component :is="roundResultIcon" /></el-icon>
+        </div>
         <p class="result-message">{{ roundMessage }}</p>
+
         <div v-if="roundStats" class="round-stats">
-          <el-statistic title="总单词" :value="roundStats.totalWords" value-style="color: #409EFF; font-size: 16px;" />
-          <el-statistic title="本轮" :value="roundStats.total" value-style="color: #606266; font-size: 16px;" />
-          <el-statistic title="正确" :value="roundStats.correct" value-style="color: #67c23a; font-size: 16px;" />
-          <el-statistic title="错误" :value="roundStats.wrong" value-style="color: #f56c6c; font-size: 16px;" />
+          <div class="stat-item">
+            <span class="stat-num">{{ roundStats.totalWords }}</span>
+            <span class="stat-label">总单词</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-num">{{ roundStats.total }}</span>
+            <span class="stat-label">本轮</span>
+          </div>
+          <div class="stat-item success">
+            <span class="stat-num">{{ roundStats.correct }}</span>
+            <span class="stat-label">正确</span>
+          </div>
+          <div class="stat-item danger">
+            <span class="stat-num">{{ roundStats.wrong }}</span>
+            <span class="stat-label">错误</span>
+          </div>
         </div>
       </div>
       <template #footer>
-        <el-button v-if="nextStep === 'continue'" type="primary" size="large" @click="continueStudy" autofocus class="dialog-btn">
+        <el-button
+          v-if="nextStep === 'continue'"
+          type="primary"
+          size="large"
+          @click="continueStudy"
+          autofocus
+          class="dialog-btn"
+        >
           {{ nextStepButtonText }}
         </el-button>
-        <el-button v-else-if="nextStep === 'enhance'" type="warning" size="large" @click="startEnhance" autofocus class="dialog-btn">
+        <el-button
+          v-else-if="nextStep === 'enhance'"
+          type="warning"
+          size="large"
+          @click="startEnhance"
+          autofocus
+          class="dialog-btn"
+        >
           开始强化听写
         </el-button>
-        <el-button v-else type="success" size="large" @click="finishStudy" autofocus class="dialog-btn">
+        <el-button
+          v-else
+          type="success"
+          size="large"
+          @click="finishStudy"
+          autofocus
+          class="dialog-btn"
+        >
           完成学习
         </el-button>
       </template>
@@ -149,7 +208,7 @@
       title="确认退出"
       :width="isMobile ? '85%' : '350px'"
     >
-      <p>确定要退出学习吗？当前进度将不会保存。</p>
+      <p class="quit-message">确定要退出学习吗？当前进度将不会保存。</p>
       <template #footer>
         <el-button @click="showQuitConfirm = false" size="large">继续学习</el-button>
         <el-button type="danger" @click="quitStudy" size="large">退出</el-button>
@@ -161,32 +220,28 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { studyAPI, groupAPI, reviewAPI } from '../api'
+import { ElMessage } from 'element-plus'
+import { studyAPI } from '../api'
 import { useResponsive } from '../composables/useResponsive'
-import { 
-  ArrowLeft, 
-  VideoPlay, 
-  Close, 
-  CircleCheck, 
-  CircleClose, 
-  Check, 
-  Warning,
-  ArrowRight
+import {
+  ArrowLeft,
+  VideoPlay,
+  CircleCheck,
+  CircleClose,
+  ArrowRight,
+  Check,
+  Warning
 } from '@element-plus/icons-vue'
 
-// 清除输入
 const clearInput = () => {
   userInput.value = ''
   focusInput()
 }
 
-// 处理返回键
 const handleBackButton = (e: PopStateEvent) => {
   if (!showRoundResult.value && !showQuitConfirm.value) {
     e.preventDefault()
     showQuitConfirm.value = true
-    // 阻止默认返回行为
     history.pushState(null, '', location.href)
   }
 }
@@ -197,7 +252,6 @@ const { isMobile } = useResponsive()
 const groupId = ref<number>(0)
 const isPlaying = ref(false)
 
-// 从路由参数或查询参数中获取groupId
 const initGroupId = () => {
   const id = route.params.id
   if (id && !isNaN(Number(id))) {
@@ -237,35 +291,24 @@ const nextStep = ref('')
 const showQuitConfirm = ref(false)
 const inputRef = ref<HTMLInputElement | null>(null)
 
-// 根据学习模式返回继续按钮的文案
 const nextStepButtonText = computed(() => {
-  if (enhanceMode.value) {
-    return '继续强化'
-  }
-  if (studyType.value === 'review') {
-    return '继续复习'
-  }
+  if (enhanceMode.value) return '继续强化'
+  if (studyType.value === 'review') return '继续复习'
   return '继续学习'
 })
 
 const currentWord = computed(() => {
-  if (enhanceMode.value) {
-    return enhanceWords.value[enhanceIndex.value]
-  }
+  if (enhanceMode.value) return enhanceWords.value[enhanceIndex.value]
   return words.value[currentIndex.value]
 })
 
 const currentWordIndex = computed(() => {
-  if (enhanceMode.value) {
-    return enhanceIndex.value + 1
-  }
+  if (enhanceMode.value) return enhanceIndex.value + 1
   return currentIndex.value + 1
 })
 
 const totalWords = computed(() => {
-  if (enhanceMode.value) {
-    return enhanceWords.value.length
-  }
+  if (enhanceMode.value) return enhanceWords.value.length
   return words.value.length
 })
 
@@ -273,21 +316,14 @@ const progressPercent = computed(() => {
   return (currentWordIndex.value / totalWords.value) * 100
 })
 
-// 根据学习模式返回对应的标题
 const studyModeTitle = computed(() => {
-  if (enhanceMode.value) {
-    return '强化听写'
-  }
-  if (studyType.value === 'review') {
-    return '单词复习'
-  }
+  if (enhanceMode.value) return '强化听写'
+  if (studyType.value === 'review') return '单词复习'
   return '单词学习'
 })
 
 const isLastWord = computed(() => {
-  if (enhanceMode.value) {
-    return enhanceIndex.value >= enhanceWords.value.length - 1
-  }
+  if (enhanceMode.value) return enhanceIndex.value >= enhanceWords.value.length - 1
   return currentIndex.value >= words.value.length - 1
 })
 
@@ -320,19 +356,15 @@ const initStudy = async () => {
       }
     }
 
-    // 先尝试普通学习模式
     let response = await studyAPI.startStudy(groupId.value, isReview, false, planId.value || undefined)
     let isEnhanceMode = false
 
-    // 如果后端标记为已完成，调用完成流程
     if (response.data.is_completed) {
       await finishStudy()
       return
     }
 
-    // 如果没有可学习的单词，尝试强化学习模式
     if (response.data.word_ids.length === 0 && !isReview) {
-      console.log('普通学习已完成，尝试强化学习模式')
       response = await studyAPI.startStudy(groupId.value, false, true, planId.value || undefined)
       if (response.data.word_ids.length > 0) {
         isEnhanceMode = true
@@ -344,10 +376,9 @@ const initStudy = async () => {
     currentRound.value = response.data.current_round
 
     if (isEnhanceMode) {
-      // 强化学习模式：使用 enhanceWordIds 和 enhanceWords
       enhanceWordIds.value = response.data.word_ids
       enhanceWords.value = []
-      enhanceIndex.value = 0  // 重置索引
+      enhanceIndex.value = 0
       for (const id of enhanceWordIds.value) {
         try {
           const wordResponse = await studyAPI.getWord(id)
@@ -362,10 +393,9 @@ const initStudy = async () => {
         return
       }
     } else {
-      // 普通学习模式：使用 wordIds 和 words
       wordIds.value = response.data.word_ids
       words.value = []
-      currentIndex.value = 0  // 重置索引
+      currentIndex.value = 0
       for (const id of wordIds.value) {
         try {
           const wordResponse = await studyAPI.getWord(id)
@@ -390,45 +420,34 @@ const initStudy = async () => {
   }
 }
 
-// 音频管理器
 class AudioManager {
   private cache: Map<string, HTMLAudioElement> = new Map()
   private currentAudio: HTMLAudioElement | null = null
   private ttsTimeout: number | null = null
-  
-  // 获取音频路径
+
   private getAudioPath(word: string): string {
     const firstLetter = word[0].toLowerCase()
     return `/audio/${firstLetter}/${word.toLowerCase()}.mp3`
   }
-  
-  // 停止当前播放的音频
+
   stop(): void {
-    // 停止本地音频
     if (this.currentAudio) {
       this.currentAudio.pause()
       this.currentAudio.currentTime = 0
       this.currentAudio = null
     }
-    
-    // 停止 TTS
     if ('speechSynthesis' in window) {
       speechSynthesis.cancel()
     }
-    
-    // 清除定时器
     if (this.ttsTimeout) {
       clearTimeout(this.ttsTimeout)
       this.ttsTimeout = null
     }
   }
-  
-  // 播放音频（优先本地，降级TTS）
+
   async play(word: string): Promise<void> {
-    // 先停止之前的音频
     this.stop()
-    
-    // 1. 检查内存缓存
+
     if (this.cache.has(word)) {
       const audio = this.cache.get(word)!
       audio.currentTime = 0
@@ -436,32 +455,28 @@ class AudioManager {
       await audio.play()
       return
     }
-    
-    // 2. 尝试播放本地音频
+
     try {
       const audioPath = this.getAudioPath(word)
       const audio = new Audio(audioPath)
-      
+
       await new Promise<void>((resolve, reject) => {
         audio.oncanplaythrough = () => resolve()
         audio.onerror = () => reject(new Error('Audio load failed'))
         audio.load()
       })
-      
+
       this.cache.set(word, audio)
       this.currentAudio = audio
       await audio.play()
       return
     } catch (e) {
-      // 本地音频不存在或加载失败，降级到TTS
       console.log(`Local audio not found for "${word}", falling back to TTS`)
     }
-    
-    // 3. 降级到 Web Speech API
+
     this.playTTS(word)
   }
-  
-  // TTS 播放英文
+
   private playTTS(word: string): void {
     if ('speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(word)
@@ -470,43 +485,26 @@ class AudioManager {
       speechSynthesis.speak(utterance)
     }
   }
-  
-  // 清洗和摘要中文释义，用于语音播放
+
   private cleanMeaningForTTS(meaning: string): string {
     if (!meaning) return ''
-    
-    // 步骤1: 去除词性标注 (n. v. adj. adv. prep. conj. vt. vi. 等)
     let cleaned = meaning.replace(/\b(n|v|adj|adv|prep|conj|vt|vi|art|num|int)\.\s*/gi, '')
-    
-    // 步骤2: 按分号或句号分割，取前2个义项
     const segments = cleaned.split(/[；。;]/)
     let selectedSegments = segments.slice(0, 2)
-    
-    // 步骤3: 清理每个义项内的逗号，只保留第一个
     selectedSegments = selectedSegments.map(segment => {
       const parts = segment.split(/[，,]/)
-      // 取逗号分隔的第一部分，避免太长
       return parts[0].trim()
     })
-    
-    // 步骤4: 用"、"连接多个义项，更适合语音播放
     let result = selectedSegments.join('、')
-    
-    // 步骤5: 限制长度（最多20个字符），避免播放过长
     if (result.length > 20) {
       result = result.substring(0, 20) + '...'
     }
-    
-    // 步骤6: 清理多余空格和特殊字符
     result = result.replace(/\s+/g, ' ').trim()
-    
     return result
   }
-  
-  // TTS 播放中文释义
+
   private playChineseTTS(meaning: string): void {
     if ('speechSynthesis' in window) {
-      // 清洗释义后再播放
       const cleanedMeaning = this.cleanMeaningForTTS(meaning)
       const utterance = new SpeechSynthesisUtterance(cleanedMeaning)
       utterance.lang = 'zh-CN'
@@ -514,55 +512,38 @@ class AudioManager {
       speechSynthesis.speak(utterance)
     }
   }
-  
-  // 播放中英文（先英文后中文）
+
   async playWithMeaning(word: string, meaning: string): Promise<void> {
-    // 先停止之前的音频
     this.stop()
-    
-    // 先播放英文
     await this.play(word)
-    
-    // 等待英文播放完成后再播放中文（2秒间隔，给用户充分的反应和回忆时间）
     await new Promise(resolve => {
       this.ttsTimeout = window.setTimeout(resolve, 2000)
     })
-    
-    // 播放中文释义（会自动清洗）
     this.playChineseTTS(meaning)
   }
-  
-  // 预加载音频
+
   preload(word: string): void {
     if (this.cache.has(word)) return
-    
     const audioPath = this.getAudioPath(word)
     const audio = new Audio(audioPath)
     audio.preload = 'auto'
-    
     audio.oncanplaythrough = () => {
       this.cache.set(word, audio)
     }
-    
     audio.load()
   }
 }
 
-// 全局音频管理器实例
 const audioManager = new AudioManager()
 
 const playPronunciation = async () => {
   if (!currentWord.value) return
-  
   isPlaying.value = true
-  
   try {
-    // 同时播放英文和中文释义
     await audioManager.playWithMeaning(currentWord.value.word, currentWord.value.meaning)
   } catch (error) {
     console.error('Play audio failed:', error)
   } finally {
-    // 音频播放结束后重置状态（中英文总时长约2-3秒）
     setTimeout(() => {
       isPlaying.value = false
     }, 3000)
@@ -571,7 +552,6 @@ const playPronunciation = async () => {
 
 const handleSubmit = async () => {
   if (!userInput.value.trim()) return
-
   submitting.value = true
 
   try {
@@ -596,7 +576,6 @@ const handleSubmit = async () => {
         playPronunciation()
       }, 1000)
     }
-
   } catch (error) {
     ElMessage.error('提交失败')
   } finally {
@@ -605,14 +584,12 @@ const handleSubmit = async () => {
 }
 
 const handleNext = () => {
-  // 停止当前播放的音频
   audioManager.stop()
   isPlaying.value = false
-  
   userInput.value = ''
   answerSubmitted.value = false
   lastResult.value = null
-  
+
   if (enhanceMode.value) {
     enhanceIndex.value++
     if (enhanceIndex.value >= enhanceWords.value.length) {
@@ -646,7 +623,7 @@ const checkRoundResult = async () => {
   try {
     const response = await studyAPI.getRoundStats(groupId.value, currentRound.value, studyType.value, planId.value || undefined)
     const data = response.data
-    
+
     const currentStats = data.current_round_stats || { correct: 0, wrong: 0, total: 0 }
     roundStats.value = {
       correct: currentStats.correct,
@@ -654,29 +631,29 @@ const checkRoundResult = async () => {
       total: currentStats.total,
       totalWords: data.total_words
     }
-    
+
     if (currentStats.wrong === 0) {
       if (studyType.value === 'review') {
         roundResultTitle.value = '复习完成!'
         roundMessage.value = `恭喜你，本轮 ${currentStats.total} 个单词全部答对！复习完成！`
         roundResultIcon.value = 'Check'
-        roundResultIconClass.value = 'correct-icon'
+        roundResultIconClass.value = 'success'
         nextStep.value = 'finish'
       } else {
         roundResultTitle.value = '本轮完成!'
         roundMessage.value = `恭喜你，本轮 ${currentStats.total} 个单词全部答对！`
         roundResultIcon.value = 'Check'
-        roundResultIconClass.value = 'correct-icon'
+        roundResultIconClass.value = 'success'
         nextStep.value = 'enhance'
       }
     } else {
       roundResultTitle.value = '本轮结果'
       roundMessage.value = `学习组共 ${data.total_words} 个单词，本轮听写 ${currentStats.total} 个单词，答对 ${currentStats.correct} 个，答错 ${currentStats.wrong} 个。`
       roundResultIcon.value = 'Warning'
-      roundResultIconClass.value = 'warning-icon'
+      roundResultIconClass.value = 'warning'
       nextStep.value = 'continue'
     }
-    
+
     showRoundResult.value = true
   } catch (error) {
     ElMessage.error('获取统计结果失败')
@@ -687,7 +664,7 @@ const checkEnhanceResult = async () => {
   try {
     const response = await studyAPI.getEnhanceStats(groupId.value, currentRound.value)
     const data = response.data
-    
+
     const currentStats = data.current_round_stats || { correct: 0, wrong: 0, total: 0 }
     roundStats.value = {
       correct: currentStats.correct,
@@ -695,21 +672,21 @@ const checkEnhanceResult = async () => {
       total: currentStats.total,
       totalWords: data.total_words
     }
-    
+
     if (currentStats.wrong === 0) {
       roundResultTitle.value = '学习完成!'
       roundMessage.value = `恭喜你，强化听写 ${currentStats.total} 个单词全部答对，学习完成！`
       roundResultIcon.value = 'Check'
-      roundResultIconClass.value = 'correct-icon'
+      roundResultIconClass.value = 'success'
       nextStep.value = 'finish'
     } else {
       roundResultTitle.value = '强化结果'
       roundMessage.value = `本轮听写 ${currentStats.total} 个单词，答对 ${currentStats.correct} 个，答错 ${currentStats.wrong} 个。`
       roundResultIcon.value = 'Warning'
-      roundResultIconClass.value = 'warning-icon'
+      roundResultIconClass.value = 'warning'
       nextStep.value = 'continue'
     }
-    
+
     showRoundResult.value = true
   } catch (error) {
     ElMessage.error('获取统计结果失败')
@@ -718,7 +695,7 @@ const checkEnhanceResult = async () => {
 
 const continueStudy = async () => {
   showRoundResult.value = false
-  
+
   if (enhanceMode.value) {
     try {
       const response = await studyAPI.startStudy(groupId.value, false, true)
@@ -726,7 +703,6 @@ const continueStudy = async () => {
       currentRound.value = response.data.current_round
       studyType.value = 'enhance'
 
-      // 如果后端标记为已完成，直接结束学习
       if (response.data.is_completed) {
         await finishStudy()
         return
@@ -751,7 +727,6 @@ const continueStudy = async () => {
       wordIds.value = response.data.word_ids
       currentRound.value = response.data.current_round
 
-      // 如果后端标记为已完成，直接结束学习
       if (response.data.is_completed) {
         await finishStudy()
         return
@@ -768,7 +743,6 @@ const continueStudy = async () => {
       }
 
       if (words.value.length === 0) {
-        // 复习模式下如果没有单词了，说明复习已完成
         if (isReview) {
           await finishStudy()
           return
@@ -798,7 +772,6 @@ const startEnhance = async () => {
     enhanceWordIds.value = response.data.word_ids
     currentRound.value = response.data.current_round
 
-    // 如果后端标记为已完成，直接结束学习
     if (response.data.is_completed) {
       await finishStudy()
       return
@@ -831,10 +804,9 @@ const startEnhance = async () => {
 
 const finishStudy = async () => {
   showRoundResult.value = false
-  
+
   try {
     await studyAPI.completeStudy(groupId.value, enhanceMode.value, studyType.value, planId.value)
-    // 根据学习模式显示不同的完成提示
     let successMessage = '学习完成！'
     if (enhanceMode.value) {
       successMessage = '强化听写完成！'
@@ -856,27 +828,21 @@ const quitStudy = () => {
 onMounted(() => {
   initStudy()
   focusInput()
-  
-  // 添加历史记录以拦截返回键
+
   history.pushState(null, '', location.href)
   window.addEventListener('popstate', handleBackButton)
-  
+
   window.addEventListener('keydown', (e) => {
-    // 播放发音快捷键：空格键
-    // 触发时机：答案已提交后、按 Enter 进入下一个词之前
-    // 此时输入框已禁用，不会与输入冲突
     if (e.key === ' ') {
-      // 在答案提交后的窗口期，阻止默认行为并播放发音
       if (answerSubmitted.value && !showRoundResult.value) {
         e.preventDefault()
         playPronunciation()
         return
       }
-      // 其他情况下也阻止空格键滚动页面（因为我们用不到页面滚动）
       e.preventDefault()
       return
     }
-    
+
     if (e.key === 'Enter') {
       if (showRoundResult.value) {
         if (nextStep.value === 'continue') {
@@ -902,578 +868,654 @@ watch(userInput, () => {
 
 <style scoped lang="scss">
 .study-container {
-  max-width: 700px;
+  max-width: 600px;
   margin: 0 auto;
-  padding: 12px;
+  padding: 20px;
   min-height: calc(100vh - 100px);
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
 }
 
-.word-card {
-  width: 100%;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-  
-  :deep(.el-card__header) {
-    border-bottom: 1px solid #ebeef5;
-    padding: 16px;
-  }
-  
-  :deep(.el-card__body) {
-    padding: 24px 16px;
-  }
+/* 顶部进度区域 */
+.study-header {
+  background: var(--color-bg-paper);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--color-border-light);
 }
 
-.header {
+.header-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 16px;
 }
 
-.title-section {
-  flex: 1;
-  text-align: center;
-  
-  h2 {
-    font-size: 18px;
-    font-weight: 600;
-    color: #303133;
-    margin-bottom: 10px;
+.back-btn {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+
+  &:hover {
+    background: var(--color-bg-base);
+    color: var(--color-text-primary);
   }
 }
 
+.title-section {
+  text-align: center;
+
+  h2 {
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin: 0;
+  }
+}
+
+.round-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 10px;
+  background: linear-gradient(135deg, rgba(var(--color-primary-rgb), 0.1) 0%, rgba(var(--color-primary-rgb), 0.05) 100%);
+  color: var(--color-primary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: var(--radius-full);
+}
+
+.progress-info {
+  text-align: right;
+}
+
+.progress-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
 .progress-bar {
-  width: 200px;
-  height: 4px;
-  background-color: #e4e7ed;
-  border-radius: 2px;
-  margin: 0 auto 6px;
+  height: 6px;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-full);
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #409EFF, #66b1ff);
-  border-radius: 3px;
-  transition: width 0.3s ease;
+  background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  border-radius: var(--radius-full);
+  transition: width 0.4s ease;
 }
 
-.progress-text {
-  font-size: 13px;
-  color: #909399;
-  margin: 0;
-}
-
-.placeholder {
-  width: 32px;
-}
-
-.word-content {
-  text-align: center;
+/* 单词卡片 */
+.word-card {
+  background: var(--color-bg-paper);
+  border-radius: var(--radius-xl);
+  padding: 40px 32px;
   margin-bottom: 24px;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--color-border-light);
+  position: relative;
+  overflow: hidden;
+  text-align: center;
 }
 
-.meaning {
-  font-size: 22px;
+.card-decoration {
+  position: absolute;
+  top: -30px;
+  right: -30px;
+  pointer-events: none;
+
+  .deco-circle {
+    position: absolute;
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(var(--color-primary-rgb), 0.05) 0%, transparent 70%);
+
+    &:last-child {
+      top: 40px;
+      right: 40px;
+      width: 80px;
+      height: 80px;
+    }
+  }
+}
+
+.word-display {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 32px;
+}
+
+.meaning-text {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
   font-weight: 600;
-  color: #303133;
-  margin-bottom: 12px;
+  color: var(--color-text-primary);
   line-height: 1.4;
+  margin-bottom: 16px;
 }
 
-.phonetic {
-  font-size: 16px;
-  color: #606266;
-  margin-bottom: 20px;
-  font-family: 'Times New Roman', serif;
+.phonetic-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-full);
 }
 
+.phonetic-label {
+  font-size: 0.6875rem;
+  color: var(--color-text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.phonetic-value {
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;
+  color: var(--color-text-secondary);
+}
+
+/* 发音按钮 */
 .pronunciation-section {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
 }
 
 .sound-btn {
-  width: 56px;
-  height: 56px;
+  width: 72px;
+  height: 72px;
   border-radius: 50%;
   border: none;
-  background: linear-gradient(135deg, #409EFF, #66b1ff);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
   color: white;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.3);
-  
-  &:active {
-    transform: scale(0.95);
+  position: relative;
+  transition: all var(--transition-base);
+  box-shadow: 0 8px 24px rgba(var(--color-primary-rgb), 0.35);
+
+  &:hover {
+    transform: scale(1.05);
+    box-shadow: 0 12px 32px rgba(var(--color-primary-rgb), 0.45);
   }
-  
+
+  &:active {
+    transform: scale(0.98);
+  }
+
   &.playing {
+    background: linear-gradient(135deg, var(--color-success) 0%, #3dd477 100%);
+    box-shadow: 0 8px 24px rgba(45, 138, 94, 0.35);
     animation: pulse 1s infinite;
-    background: linear-gradient(135deg, #67c23a, #85ce61);
-    box-shadow: 0 4px 12px rgba(103, 194, 58, 0.3);
   }
 }
 
-@keyframes pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
+.sound-wave {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  opacity: 0;
+  animation: soundWave 1.5s ease-out infinite;
+
+  &.delay-1 {
+    animation-delay: 0.3s;
+  }
+
+  &.delay-2 {
+    animation-delay: 0.6s;
+  }
+}
+
+@keyframes soundWave {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
 }
 
 .sound-hint {
-  font-size: 12px;
-  color: #909399;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
 }
 
+/* 输入区域 */
 .input-section {
-  margin-top: 20px;
-  text-align: center;
+  flex: 1;
 }
 
-// 输入框包装器
+.input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .input-wrapper {
   position: relative;
-  margin-bottom: 12px;
-  display: flex;
-  justify-content: center;
 }
 
 .word-input {
   width: 100%;
-  min-height: 56px;
-  padding: 12px 44px 12px 16px;
-  background-color: #f5f7fa;
-  border: 2px solid #e4e7ed;
-  border-radius: 12px;
-  font-family: 'Courier New', monospace;
-  font-size: 20px;
-  font-weight: 600;
-  color: #303133;
-  letter-spacing: 1px;
-  text-align: center; // 文字居中
-  transition: all 0.3s ease;
+  min-height: 60px;
+  padding: 16px 50px 16px 20px;
+  background: var(--color-bg-paper);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  text-align: center;
+  letter-spacing: 0.1em;
+  transition: all var(--transition-fast);
   box-sizing: border-box;
-  
+
   &:focus {
     outline: none;
-    border-color: #409EFF;
-    background-color: #fff;
-    box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.1);
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 4px rgba(var(--color-primary-rgb), 0.1);
   }
-  
+
   &::placeholder {
-    color: #c0c4cc;
+    color: var(--color-text-light);
     font-weight: 400;
-  }
-  
-  // 禁用自动填充背景色
-  &:-webkit-autofill,
-  &:-webkit-autofill:hover,
-  &:-webkit-autofill:focus {
-    -webkit-box-shadow: 0 0 0px 1000px #f5f7fa inset;
-    transition: background-color 5000s ease-in-out 0s;
+    letter-spacing: normal;
   }
 }
 
-// 清除按钮
 .clear-btn {
   position: absolute;
-  right: 12px;
+  right: 16px;
   top: 50%;
   transform: translateY(-50%);
   width: 28px;
   height: 28px;
   border: none;
-  background: #dcdfe6;
+  background: var(--color-bg-muted);
   border-radius: 50%;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  transition: all 0.2s ease;
-  padding: 0;
-  
-  &:active {
-    transform: translateY(-50%) scale(0.9);
-    background: #c0c4cc;
+  color: var(--color-text-muted);
+  transition: all var(--transition-fast);
+
+  &:hover {
+    background: var(--color-border);
+    color: var(--color-text-primary);
   }
-  
+
   .el-icon {
     font-size: 14px;
   }
-}
-
-// 移除旧的样式
-.typing-display,
-.typed-text,
-.cursor,
-.cursor-blink,
-.hidden-input {
-  display: none;
-}
-
-.submit-area {
-  margin-top: 12px;
 }
 
 .submit-btn {
   width: 100%;
-  height: 48px;
-  font-size: 17px;
-  border-radius: 24px;
+  height: 52px;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  border: none;
+  box-shadow: 0 4px 16px rgba(var(--color-primary-rgb), 0.3);
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(var(--color-primary-rgb), 0.4);
+  }
 }
 
+/* 结果区域 */
 .result-area {
-  margin-top: 20px;
   text-align: center;
 }
 
 .result-box {
-  padding: 20px 16px;
-  border-radius: 12px;
-  margin-bottom: 16px;
-  animation: slideIn 0.3s ease;
-  
+  background: var(--color-bg-paper);
+  border-radius: var(--radius-xl);
+  padding: 24px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--color-border-light);
+  animation: fadeInUp 0.3s ease;
+
   &.correct {
-    background-color: #f0f9eb;
-    border: 1px solid #b3e19d;
+    border-color: rgba(45, 138, 94, 0.2);
+    background: linear-gradient(135deg, rgba(45, 138, 94, 0.03) 0%, rgba(45, 138, 94, 0.08) 100%);
   }
-  
+
   &.wrong {
-    background-color: #fef0f0;
-    border: 1px solid #fbc4c4;
+    border-color: rgba(196, 84, 74, 0.2);
+    background: linear-gradient(135deg, rgba(196, 84, 74, 0.03) 0%, rgba(196, 84, 74, 0.08) 100%);
   }
 }
 
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
+.result-icon {
+  margin-bottom: 8px;
 
-.result-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin-bottom: 12px;
+  .el-icon {
+    color: var(--color-success);
+  }
+
+  .wrong & .el-icon {
+    color: var(--color-danger);
+  }
 }
 
 .result-text {
-  font-size: 18px;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
   font-weight: 600;
-}
+  margin-bottom: 16px;
 
-.result-box.correct .result-text {
-  color: #67c23a;
-}
+  .correct & {
+    color: var(--color-success);
+  }
 
-.result-box.wrong .result-text {
-  color: #f56c6c;
+  .wrong & {
+    color: var(--color-danger);
+  }
 }
 
 .answer-comparison {
-  margin-top: 16px;
-  padding: 12px;
-  background-color: rgba(255, 255, 255, 0.8);
-  border-radius: 8px;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-lg);
+  padding: 16px;
 }
 
 .answer-row {
   display: flex;
-  align-items: center;
   justify-content: center;
-  gap: 12px;
-  margin: 8px 0;
-  font-size: 15px;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+
+  &:not(:last-child) {
+    border-bottom: 1px solid var(--color-border-light);
+  }
 }
 
 .answer-label {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
   min-width: 70px;
   text-align: right;
-  color: #909399;
-  font-size: 13px;
-  font-weight: 500;
 }
 
 .answer-value {
-  min-width: 100px;
-  text-align: left;
-  font-family: 'Courier New', monospace;
-  font-size: 18px;
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
   font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 6px;
-  background-color: #f5f7fa;
-  border: 2px solid transparent;
-  letter-spacing: 1px;
-}
+  padding: 4px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-paper);
+  min-width: 120px;
 
-.correct-text {
-  color: #67c23a;
-}
+  &.correct {
+    color: var(--color-success);
+  }
 
-.wrong-text {
-  color: #f56c6c;
+  &.wrong {
+    color: var(--color-danger);
+  }
 }
 
 .next-btn {
   width: 100%;
-  height: 48px;
-  font-size: 17px;
-  border-radius: 24px;
-}
-
-.keyboard-hint {
-  margin-top: 12px;
-  color: #909399;
-  font-size: 13px;
+  height: 52px;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  border: none;
+  box-shadow: 0 4px 16px rgba(var(--color-primary-rgb), 0.3);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
 
-  .key-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2px 8px;
-    background: #f5f7fa;
-    border: 1px solid #dcdfe6;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
-    color: #606266;
-    font-family: monospace;
-    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1);
-  }
-
-  .key-divider {
-    color: #c0c4cc;
-    margin: 0 4px;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(var(--color-primary-rgb), 0.4);
   }
 }
 
+.keyboard-hint {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.key-label {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.05);
+}
+
+.key-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--color-border);
+}
+
+/* 对话框 */
 .round-result {
   text-align: center;
-  padding: 10px 0;
-  
-  .el-icon {
-    margin-bottom: 12px;
+  padding: 16px 0;
+}
+
+.result-icon-large {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+
+  &.success {
+    background: linear-gradient(135deg, rgba(45, 138, 94, 0.1) 0%, rgba(45, 138, 94, 0.2) 100%);
+    color: var(--color-success);
   }
-}
 
-.correct-icon {
-  color: #67c23a;
-}
-
-.warning-icon {
-  color: #e6a23c;
+  &.warning {
+    background: linear-gradient(135deg, rgba(212, 134, 12, 0.1) 0%, rgba(212, 134, 12, 0.2) 100%);
+    color: var(--color-warning);
+  }
 }
 
 .result-message {
-  font-size: 15px;
-  color: #606266;
-  margin-bottom: 16px;
-  line-height: 1.5;
+  font-size: 0.9375rem;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin-bottom: 24px;
 }
 
 .round-stats {
-  display: flex;
-  justify-content: center;
-  gap: 16px;
-  margin-top: 16px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.stat-item {
+  text-align: center;
+  padding: 12px 8px;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
+
+  .stat-num {
+    display: block;
+    font-family: var(--font-display);
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    line-height: 1.2;
+  }
+
+  .stat-label {
+    display: block;
+    font-size: 0.6875rem;
+    color: var(--color-text-muted);
+    margin-top: 2px;
+  }
+
+  &.success .stat-num {
+    color: var(--color-success);
+  }
+
+  &.danger .stat-num {
+    color: var(--color-danger);
+  }
 }
 
 .dialog-btn {
   width: 100%;
-  height: 44px;
+  height: 48px;
+  font-weight: 600;
+  border-radius: var(--radius-lg);
 }
 
-// 桌面端样式
-@media (min-width: 768px) {
+.quit-message {
+  color: var(--color-text-secondary);
+  text-align: center;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
   .study-container {
-    padding: 20px;
+    padding: 16px;
+    padding-bottom: 100px;
   }
-  
-  .word-card {
-    :deep(.el-card__header) {
-      padding: 20px;
-    }
-    
-    :deep(.el-card__body) {
-      padding: 40px;
-    }
-  }
-  
-  .title-section h2 {
-    font-size: 20px;
-    margin-bottom: 12px;
-  }
-  
-  .progress-bar {
-    width: 300px;
-    height: 4px;
-    margin-bottom: 8px;
-  }
-  
-  .progress-text {
-    font-size: 14px;
-  }
-  
-  .word-content {
-    margin-bottom: 40px;
-  }
-  
-  .meaning {
-    font-size: 28px;
+
+  .study-header {
+    padding: 16px;
     margin-bottom: 16px;
   }
-  
-  .phonetic {
-    font-size: 18px;
-    margin-bottom: 30px;
+
+  .header-top {
+    margin-bottom: 12px;
   }
-  
+
+  .title-section h2 {
+    font-size: 1.125rem;
+  }
+
+  .word-card {
+    padding: 32px 20px;
+    margin-bottom: 20px;
+  }
+
+  .meaning-text {
+    font-size: 1.375rem;
+  }
+
+  .phonetic-text {
+    padding: 4px 12px;
+  }
+
   .sound-btn {
     width: 64px;
     height: 64px;
   }
-  
-  .sound-hint {
-    font-size: 13px;
+
+  .word-input {
+    min-height: 56px;
+    font-size: 1.125rem;
+    padding: 14px 44px 14px 16px;
   }
-  
-  .input-section {
-    margin-top: 30px;
-  }
-  
-  .typing-display {
-    min-height: 60px;
-    padding: 12px 20px;
-    margin-bottom: 16px;
-    font-size: 28px;
-  }
-  
-  .submit-btn {
-    width: auto;
-    min-width: 120px;
-    height: 44px;
-    font-size: 16px;
-  }
-  
-  .result-area {
-    margin-top: 30px;
-  }
-  
-  .result-box {
-    padding: 24px;
-    margin-bottom: 20px;
-  }
-  
-  .result-text {
-    font-size: 20px;
-  }
-  
-  .answer-comparison {
-    margin-top: 20px;
-    padding: 20px 40px;
-    display: inline-block;
-  }
-  
-  .answer-row {
-    gap: 20px;
-    margin: 12px 0;
-    font-size: 18px;
-  }
-  
-  .answer-label {
-    min-width: 80px;
-    font-size: 14px;
-  }
-  
-  .answer-value {
-    min-width: 150px;
-    font-size: 24px;
-    padding: 8px 16px;
-  }
-  
+
+  .submit-btn,
   .next-btn {
-    width: auto;
-    min-width: 120px;
-    height: 44px;
-    font-size: 16px;
+    height: 48px;
+    font-size: 0.9375rem;
   }
-  
-  .keyboard-hint {
-    margin-top: 16px;
+
+  .result-box {
+    padding: 20px 16px;
   }
-  
-  .round-result {
-    padding: 20px 0;
-    
-    .el-icon {
-      margin-bottom: 16px;
-    }
+
+  .result-text {
+    font-size: 1.125rem;
   }
-  
-  .result-message {
-    font-size: 16px;
-    margin-bottom: 20px;
+
+  .answer-value {
+    font-size: 1.125rem;
+    min-width: 100px;
   }
-  
+
   .round-stats {
-    gap: 30px;
-    margin-top: 20px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .stat-item .stat-num {
+    font-size: 1.25rem;
   }
 }
 
-// 横屏优化
+/* 横屏优化 */
 @media (orientation: landscape) and (max-width: 1024px) {
-  .word-card :deep(.el-card__body) {
-    padding: 20px;
+  .study-container {
+    padding: 12px;
+    padding-bottom: 70px;
   }
-  
-  .word-content {
-    margin-bottom: 20px;
+
+  .word-card {
+    padding: 24px 20px;
   }
-  
-  .meaning {
-    font-size: 20px;
-    margin-bottom: 8px;
+
+  .meaning-text {
+    font-size: 1.25rem;
   }
-  
-  .phonetic {
-    font-size: 14px;
-    margin-bottom: 16px;
-  }
-  
+
   .sound-btn {
-    width: 48px;
-    height: 48px;
+    width: 56px;
+    height: 56px;
   }
-  
-  .typing-display {
-    min-height: 44px;
-    font-size: 20px;
-  }
-  
-  .result-box {
-    padding: 16px;
+
+  .round-stats {
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 </style>
