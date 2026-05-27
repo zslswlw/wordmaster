@@ -1,37 +1,39 @@
 <template>
   <div class="study-container">
     <!-- 顶部进度条 -->
-    <div class="study-header animate-fade-in">
-      <div class="header-top">
-        <el-button @click="showQuitConfirm = true" circle class="back-btn">
+    <div class="study-header">
+      <div class="header-left">
+        <el-button @click="showQuitConfirm = true" circle size="small">
           <el-icon><ArrowLeft /></el-icon>
         </el-button>
-        <div class="title-section">
-          <h2>{{ studyModeTitle }}</h2>
-          <span class="round-badge" v-if="currentRound > 1">第 {{ currentRound }} 轮</span>
-        </div>
-        <div class="progress-info">
-          <span class="progress-text">{{ currentWordIndex }} / {{ totalWords }}</span>
-        </div>
       </div>
-      <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+      <div class="header-center">
+        <h2>{{ studyModeTitle }}</h2>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+        </div>
+        <p class="progress-text">{{ currentWordIndex }} / {{ totalWords }}</p>
+      </div>
+      <div class="header-right">
+        <span class="round-badge" v-if="currentRound > 1">第 {{ currentRound }} 轮</span>
+        <button
+          class="phonetic-toggle"
+          :class="{ active: showPhonetic }"
+          @click="togglePhonetic"
+          :title="showPhonetic ? '隐藏音标' : '显示音标'"
+        >
+          <el-icon><ChatDotRound /></el-icon>
+        </button>
       </div>
     </div>
 
     <!-- 单词卡片 -->
-    <div class="word-card animate-fade-in-up delay-1">
-      <div class="card-decoration">
-        <div class="deco-circle"></div>
-        <div class="deco-circle"></div>
-      </div>
-
+    <div class="word-card">
       <div class="word-display">
-        <div class="meaning-text">{{ currentWord?.meaning }}</div>
-        <div class="phonetic-text" v-if="currentWord?.phonetic">
-          <span class="phonetic-label">音标</span>
-          <span class="phonetic-value">{{ currentWord.phonetic }}</span>
-        </div>
+        <h3 class="meaning">{{ currentWord?.meaning }}</h3>
+        <p class="phonetic" v-if="currentWord?.phonetic && showPhonetic">
+          {{ currentWord.phonetic }}
+        </p>
       </div>
 
       <div class="pronunciation-section">
@@ -40,96 +42,84 @@
           :class="{ playing: isPlaying }"
           @click="playPronunciation"
         >
-          <el-icon :size="28"><VideoPlay /></el-icon>
-          <span class="sound-wave" v-if="isPlaying"></span>
-          <span class="sound-wave delay-1" v-if="isPlaying"></span>
-          <span class="sound-wave delay-2" v-if="isPlaying"></span>
+          <el-icon :size="24"><VideoPlay /></el-icon>
         </button>
         <span class="sound-hint">点击播放发音</span>
       </div>
-    </div>
 
-    <!-- 输入区域 -->
-    <div class="input-section animate-fade-in-up delay-2">
-      <div v-if="!answerSubmitted" class="input-area">
-        <div class="input-wrapper">
-          <input
-            ref="inputRef"
-            v-model="userInput"
-            type="text"
-            class="word-input"
-            @keyup.enter="handleSubmit"
-            :disabled="answerSubmitted"
-            autocomplete="off"
-            autocorrect="off"
-            autocapitalize="off"
-            spellcheck="false"
-            enterkeyhint="done"
-            inputmode="text"
-            placeholder="输入单词..."
-          />
-          <button
-            v-if="userInput"
-            class="clear-btn"
-            @click="clearInput"
-            type="button"
+      <!-- 输入区域 -->
+      <div class="input-section">
+        <div v-if="!answerSubmitted" class="input-area">
+          <div class="input-wrapper">
+            <input
+              ref="inputRef"
+              v-model="userInput"
+              type="text"
+              class="word-input"
+              @keyup.enter="handleSubmit"
+              :disabled="answerSubmitted"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+              enterkeyhint="done"
+              inputmode="text"
+              placeholder="输入单词..."
+            />
+            <button
+              v-if="userInput"
+              class="clear-btn"
+              @click="clearInput"
+              type="button"
+            >
+              <el-icon><CircleClose /></el-icon>
+            </button>
+          </div>
+
+          <el-button
+            type="primary"
+            @click="handleSubmit"
+            :loading="submitting"
+            :disabled="!userInput.trim()"
+            class="submit-btn"
           >
-            <el-icon><CircleClose /></el-icon>
-          </button>
+            提交
+          </el-button>
         </div>
 
-        <el-button
-          type="primary"
-          size="large"
-          @click="handleSubmit"
-          :loading="submitting"
-          :disabled="!userInput.trim()"
-          class="submit-btn"
-        >
-          提交答案
-        </el-button>
-      </div>
-
-      <!-- 结果区域 -->
-      <div v-if="answerSubmitted" class="result-area">
-        <div :class="['result-box', lastResult?.correct ? 'correct' : 'wrong']">
-          <div class="result-icon">
-            <el-icon :size="40" v-if="lastResult?.correct"><CircleCheck /></el-icon>
-            <el-icon :size="40" v-else><CircleClose /></el-icon>
-          </div>
-          <div class="result-text">
-            {{ lastResult?.correct ? '回答正确!' : '回答错误' }}
-          </div>
-
-          <div class="answer-comparison">
-            <div class="answer-row">
-              <span class="answer-label">你的答案</span>
-              <span :class="['answer-value', 'user-answer', lastResult?.correct ? 'correct' : 'wrong']">
-                {{ lastResult?.user_answer || '-' }}
-              </span>
+        <!-- 结果区域 -->
+        <div v-if="answerSubmitted" class="result-area">
+          <div :class="['result-box', lastResult?.correct ? 'correct' : 'wrong']">
+            <div class="result-icon">
+              <el-icon v-if="lastResult?.correct"><CircleCheck /></el-icon>
+              <el-icon v-else><CircleClose /></el-icon>
             </div>
-            <div class="answer-row">
-              <span class="answer-label">正确答案</span>
-              <span class="answer-value correct">{{ lastResult?.correct_answer }}</span>
+            <span class="result-text">{{ lastResult?.correct ? '回答正确!' : '回答错误' }}</span>
+
+            <div class="answer-comparison">
+              <div class="answer-row">
+                <span class="answer-label">你的答案</span>
+                <span :class="['answer-value', lastResult?.correct ? 'correct' : 'wrong']">
+                  {{ lastResult?.user_answer || '-' }}
+                </span>
+              </div>
+              <div class="answer-row">
+                <span class="answer-label">正确答案</span>
+                <span class="answer-value correct">{{ lastResult?.correct_answer }}</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <el-button
-          type="primary"
-          size="large"
-          @click="handleNext"
-          autofocus
-          class="next-btn"
-        >
-          {{ isLastWord ? '查看结果' : '下一个' }}
-          <el-icon><ArrowRight /></el-icon>
-        </el-button>
+          <el-button type="primary" @click="handleNext" class="next-btn">
+            {{ isLastWord ? '查看结果' : '下一个' }}
+            <el-icon><ArrowRight /></el-icon>
+          </el-button>
 
-        <div class="keyboard-hint" v-if="!isMobile">
-          <span class="key"><span class="key-label">Enter</span> 继续</span>
-          <span class="key-divider"></span>
-          <span class="key"><span class="key-label">Space</span> 重播发音</span>
+          <p class="keyboard-hint" v-if="!isMobile">
+            <span class="key"><span class="key-label">Enter</span> 继续</span>
+            <span class="key-divider">|</span>
+            <span class="key"><span class="key-label">Space</span> 重播</span>
+          </p>
         </div>
       </div>
     </div>
@@ -138,17 +128,16 @@
     <el-dialog
       v-model="showRoundResult"
       :title="roundResultTitle"
-      :width="isMobile ? '90%' : '420px'"
+      :width="isMobile ? '90%' : '400px'"
       :close-on-click-modal="false"
       :show-close="false"
       class="round-dialog"
     >
       <div class="round-result">
-        <div :class="['result-icon-large', roundResultIconClass]">
-          <el-icon :size="48"><component :is="roundResultIcon" /></el-icon>
-        </div>
+        <el-icon :size="48" :class="roundResultIconClass">
+          <component :is="roundResultIcon" />
+        </el-icon>
         <p class="result-message">{{ roundMessage }}</p>
-
         <div v-if="roundStats" class="round-stats">
           <div class="stat-item">
             <span class="stat-num">{{ roundStats.totalWords }}</span>
@@ -169,34 +158,13 @@
         </div>
       </div>
       <template #footer>
-        <el-button
-          v-if="nextStep === 'continue'"
-          type="primary"
-          size="large"
-          @click="continueStudy"
-          autofocus
-          class="dialog-btn"
-        >
+        <el-button v-if="nextStep === 'continue'" type="primary" @click="continueStudy" class="dialog-btn">
           {{ nextStepButtonText }}
         </el-button>
-        <el-button
-          v-else-if="nextStep === 'enhance'"
-          type="warning"
-          size="large"
-          @click="startEnhance"
-          autofocus
-          class="dialog-btn"
-        >
+        <el-button v-else-if="nextStep === 'enhance'" type="warning" @click="startEnhance" class="dialog-btn">
           开始强化听写
         </el-button>
-        <el-button
-          v-else
-          type="success"
-          size="large"
-          @click="finishStudy"
-          autofocus
-          class="dialog-btn"
-        >
+        <el-button v-else type="success" @click="finishStudy" class="dialog-btn">
           完成学习
         </el-button>
       </template>
@@ -208,10 +176,10 @@
       title="确认退出"
       :width="isMobile ? '85%' : '350px'"
     >
-      <p class="quit-message">确定要退出学习吗？当前进度将不会保存。</p>
+      <p>确定要退出学习吗？当前进度将不会保存。</p>
       <template #footer>
-        <el-button @click="showQuitConfirm = false" size="large">继续学习</el-button>
-        <el-button type="danger" @click="quitStudy" size="large">退出</el-button>
+        <el-button @click="showQuitConfirm = false">继续学习</el-button>
+        <el-button type="danger" @click="quitStudy">退出</el-button>
       </template>
     </el-dialog>
   </div>
@@ -229,9 +197,21 @@ import {
   CircleCheck,
   CircleClose,
   ArrowRight,
-  Check,
-  Warning
+  ChatDotRound
 } from '@element-plus/icons-vue'
+
+// 音标显示开关 - 使用 localStorage
+const showPhonetic = ref(true)
+const loadPhoneticSetting = () => {
+  const stored = localStorage.getItem('showPhonetic')
+  if (stored !== null) {
+    showPhonetic.value = stored === 'true'
+  }
+}
+const togglePhonetic = () => {
+  showPhonetic.value = !showPhonetic.value
+  localStorage.setItem('showPhonetic', String(showPhonetic.value))
+}
 
 const clearInput = () => {
   userInput.value = ''
@@ -459,19 +439,17 @@ class AudioManager {
     try {
       const audioPath = this.getAudioPath(word)
       const audio = new Audio(audioPath)
-
       await new Promise<void>((resolve, reject) => {
         audio.oncanplaythrough = () => resolve()
         audio.onerror = () => reject(new Error('Audio load failed'))
         audio.load()
       })
-
       this.cache.set(word, audio)
       this.currentAudio = audio
       await audio.play()
       return
     } catch (e) {
-      console.log(`Local audio not found for "${word}", falling back to TTS`)
+      console.log(`TTS fallback for "${word}"`)
     }
 
     this.playTTS(word)
@@ -486,33 +464,6 @@ class AudioManager {
     }
   }
 
-  private cleanMeaningForTTS(meaning: string): string {
-    if (!meaning) return ''
-    let cleaned = meaning.replace(/\b(n|v|adj|adv|prep|conj|vt|vi|art|num|int)\.\s*/gi, '')
-    const segments = cleaned.split(/[；。;]/)
-    let selectedSegments = segments.slice(0, 2)
-    selectedSegments = selectedSegments.map(segment => {
-      const parts = segment.split(/[，,]/)
-      return parts[0].trim()
-    })
-    let result = selectedSegments.join('、')
-    if (result.length > 20) {
-      result = result.substring(0, 20) + '...'
-    }
-    result = result.replace(/\s+/g, ' ').trim()
-    return result
-  }
-
-  private playChineseTTS(meaning: string): void {
-    if ('speechSynthesis' in window) {
-      const cleanedMeaning = this.cleanMeaningForTTS(meaning)
-      const utterance = new SpeechSynthesisUtterance(cleanedMeaning)
-      utterance.lang = 'zh-CN'
-      utterance.rate = 1.0
-      speechSynthesis.speak(utterance)
-    }
-  }
-
   async playWithMeaning(word: string, meaning: string): Promise<void> {
     this.stop()
     await this.play(word)
@@ -522,15 +473,13 @@ class AudioManager {
     this.playChineseTTS(meaning)
   }
 
-  preload(word: string): void {
-    if (this.cache.has(word)) return
-    const audioPath = this.getAudioPath(word)
-    const audio = new Audio(audioPath)
-    audio.preload = 'auto'
-    audio.oncanplaythrough = () => {
-      this.cache.set(word, audio)
+  private playChineseTTS(meaning: string): void {
+    if ('speechSynthesis' in window) {
+      const utterance = new SpeechSynthesisUtterance(meaning)
+      utterance.lang = 'zh-CN'
+      utterance.rate = 1.0
+      speechSynthesis.speak(utterance)
     }
-    audio.load()
   }
 }
 
@@ -596,9 +545,7 @@ const handleNext = () => {
       checkEnhanceResult()
     } else {
       focusInput()
-      setTimeout(() => {
-        playPronunciation()
-      }, 500)
+      setTimeout(() => playPronunciation(), 500)
     }
   } else {
     currentIndex.value++
@@ -606,9 +553,7 @@ const handleNext = () => {
       checkRoundResult()
     } else {
       focusInput()
-      setTimeout(() => {
-        playPronunciation()
-      }, 500)
+      setTimeout(() => playPronunciation(), 500)
     }
   }
 }
@@ -623,7 +568,6 @@ const checkRoundResult = async () => {
   try {
     const response = await studyAPI.getRoundStats(groupId.value, currentRound.value, studyType.value, planId.value || undefined)
     const data = response.data
-
     const currentStats = data.current_round_stats || { correct: 0, wrong: 0, total: 0 }
     roundStats.value = {
       correct: currentStats.correct,
@@ -636,21 +580,21 @@ const checkRoundResult = async () => {
       if (studyType.value === 'review') {
         roundResultTitle.value = '复习完成!'
         roundMessage.value = `恭喜你，本轮 ${currentStats.total} 个单词全部答对！复习完成！`
-        roundResultIcon.value = 'Check'
-        roundResultIconClass.value = 'success'
+        roundResultIcon.value = 'CircleCheck'
+        roundResultIconClass.value = 'correct-icon'
         nextStep.value = 'finish'
       } else {
         roundResultTitle.value = '本轮完成!'
         roundMessage.value = `恭喜你，本轮 ${currentStats.total} 个单词全部答对！`
-        roundResultIcon.value = 'Check'
-        roundResultIconClass.value = 'success'
+        roundResultIcon.value = 'CircleCheck'
+        roundResultIconClass.value = 'correct-icon'
         nextStep.value = 'enhance'
       }
     } else {
       roundResultTitle.value = '本轮结果'
       roundMessage.value = `学习组共 ${data.total_words} 个单词，本轮听写 ${currentStats.total} 个单词，答对 ${currentStats.correct} 个，答错 ${currentStats.wrong} 个。`
       roundResultIcon.value = 'Warning'
-      roundResultIconClass.value = 'warning'
+      roundResultIconClass.value = 'warning-icon'
       nextStep.value = 'continue'
     }
 
@@ -664,7 +608,6 @@ const checkEnhanceResult = async () => {
   try {
     const response = await studyAPI.getEnhanceStats(groupId.value, currentRound.value)
     const data = response.data
-
     const currentStats = data.current_round_stats || { correct: 0, wrong: 0, total: 0 }
     roundStats.value = {
       correct: currentStats.correct,
@@ -676,14 +619,14 @@ const checkEnhanceResult = async () => {
     if (currentStats.wrong === 0) {
       roundResultTitle.value = '学习完成!'
       roundMessage.value = `恭喜你，强化听写 ${currentStats.total} 个单词全部答对，学习完成！`
-      roundResultIcon.value = 'Check'
-      roundResultIconClass.value = 'success'
+      roundResultIcon.value = 'CircleCheck'
+      roundResultIconClass.value = 'correct-icon'
       nextStep.value = 'finish'
     } else {
       roundResultTitle.value = '强化结果'
       roundMessage.value = `本轮听写 ${currentStats.total} 个单词，答对 ${currentStats.correct} 个，答错 ${currentStats.wrong} 个。`
       roundResultIcon.value = 'Warning'
-      roundResultIconClass.value = 'warning'
+      roundResultIconClass.value = 'warning-icon'
       nextStep.value = 'continue'
     }
 
@@ -711,12 +654,9 @@ const continueStudy = async () => {
       const wordPromises = enhanceWordIds.value.map(id => studyAPI.getWord(id))
       const wordResponses = await Promise.all(wordPromises)
       enhanceWords.value = wordResponses.map(r => r.data)
-
       enhanceIndex.value = 0
       focusInput()
-      setTimeout(() => {
-        playPronunciation()
-      }, 500)
+      setTimeout(() => playPronunciation(), 500)
     } catch (error) {
       ElMessage.error('加载强化听写单词失败')
     }
@@ -753,9 +693,7 @@ const continueStudy = async () => {
 
       currentIndex.value = 0
       focusInput()
-      setTimeout(() => {
-        playPronunciation()
-      }, 500)
+      setTimeout(() => playPronunciation(), 500)
     } catch (error) {
       ElMessage.error('加载单词失败')
     }
@@ -794,9 +732,7 @@ const startEnhance = async () => {
 
     enhanceIndex.value = 0
     focusInput()
-    setTimeout(() => {
-      playPronunciation()
-    }, 500)
+    setTimeout(() => playPronunciation(), 500)
   } catch (error) {
     ElMessage.error('加载强化听写单词失败')
   }
@@ -826,6 +762,7 @@ const quitStudy = () => {
 }
 
 onMounted(() => {
+  loadPhoneticSetting()
   initStudy()
   focusInput()
 
@@ -868,161 +805,120 @@ watch(userInput, () => {
 
 <style scoped lang="scss">
 .study-container {
-  max-width: 600px;
-  margin: 0 auto;
-  padding: 20px;
-  min-height: calc(100vh - 100px);
-  display: flex;
-  flex-direction: column;
+  padding: 12px;
+  min-height: 100vh;
+  box-sizing: border-box;
 }
 
-/* 顶部进度区域 */
+/* 顶部进度条 */
 .study-header {
-  background: var(--color-bg-paper);
-  border-radius: var(--radius-xl);
-  padding: 20px;
-  margin-bottom: 24px;
-  box-shadow: var(--shadow-md);
-  border: 1px solid var(--color-border-light);
-}
-
-.header-top {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   margin-bottom: 16px;
+  padding: 0 4px;
 }
 
-.back-btn {
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-muted);
-  color: var(--color-text-secondary);
-
-  &:hover {
-    background: var(--color-bg-base);
-    color: var(--color-text-primary);
-  }
+.header-left, .header-right {
+  width: 60px;
 }
 
-.title-section {
+.header-center {
+  flex: 1;
   text-align: center;
 
   h2 {
-    font-family: var(--font-display);
-    font-size: 1.25rem;
+    font-size: 16px;
     font-weight: 600;
-    color: var(--color-text-primary);
-    margin: 0;
+    color: #303133;
+    margin: 0 0 8px 0;
   }
 }
 
-.round-badge {
-  display: inline-block;
-  margin-top: 4px;
-  padding: 2px 10px;
-  background: linear-gradient(135deg, rgba(var(--color-primary-rgb), 0.1) 0%, rgba(var(--color-primary-rgb), 0.05) 100%);
-  color: var(--color-primary);
-  font-size: 0.75rem;
-  font-weight: 500;
-  border-radius: var(--radius-full);
-}
-
-.progress-info {
-  text-align: right;
-}
-
-.progress-text {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--color-text-muted);
-}
-
 .progress-bar {
-  height: 6px;
-  background: var(--color-bg-muted);
-  border-radius: var(--radius-full);
+  height: 4px;
+  background: #e4e7ed;
+  border-radius: 2px;
   overflow: hidden;
+  margin-bottom: 4px;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
-  border-radius: var(--radius-full);
-  transition: width 0.4s ease;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: #909399;
+  margin: 0;
+}
+
+.round-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(102, 126, 234, 0.1);
+  color: #667eea;
+  font-size: 11px;
+  border-radius: 10px;
+}
+
+.phonetic-toggle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: #f5f7fa;
+  color: #909399;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  padding: 0;
+
+  &:hover {
+    background: #e4e7ed;
+    color: #667eea;
+  }
+
+  &.active {
+    background: rgba(102, 126, 234, 0.1);
+    color: #667eea;
+  }
+
+  .el-icon {
+    font-size: 14px;
+  }
 }
 
 /* 单词卡片 */
 .word-card {
-  background: var(--color-bg-paper);
-  border-radius: var(--radius-xl);
-  padding: 40px 32px;
-  margin-bottom: 24px;
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--color-border-light);
-  position: relative;
-  overflow: hidden;
-  text-align: center;
-}
-
-.card-decoration {
-  position: absolute;
-  top: -30px;
-  right: -30px;
-  pointer-events: none;
-
-  .deco-circle {
-    position: absolute;
-    width: 120px;
-    height: 120px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, rgba(var(--color-primary-rgb), 0.05) 0%, transparent 70%);
-
-    &:last-child {
-      top: 40px;
-      right: 40px;
-      width: 80px;
-      height: 80px;
-    }
-  }
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
 }
 
 .word-display {
-  position: relative;
-  z-index: 1;
-  margin-bottom: 32px;
+  text-align: center;
+  margin-bottom: 20px;
 }
 
-.meaning-text {
-  font-family: var(--font-display);
-  font-size: 1.75rem;
+.meaning {
+  font-size: 20px;
   font-weight: 600;
-  color: var(--color-text-primary);
+  color: #303133;
+  margin: 0 0 8px 0;
   line-height: 1.4;
-  margin-bottom: 16px;
 }
 
-.phonetic-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  background: var(--color-bg-muted);
-  border-radius: var(--radius-full);
-}
-
-.phonetic-label {
-  font-size: 0.6875rem;
-  color: var(--color-text-light);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.phonetic-value {
-  font-family: var(--font-mono);
-  font-size: 0.9375rem;
-  color: var(--color-text-secondary);
+.phonetic {
+  font-size: 14px;
+  color: #909399;
+  margin: 0;
+  font-family: 'Times New Roman', serif;
 }
 
 /* 发音按钮 */
@@ -1030,85 +926,46 @@ watch(userInput, () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  position: relative;
-  z-index: 1;
+  gap: 8px;
+  margin-bottom: 20px;
 }
 
 .sound-btn {
-  width: 72px;
-  height: 72px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   border: none;
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  background: linear-gradient(135deg, #667eea, #764ba2);
   color: white;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  position: relative;
-  transition: all var(--transition-base);
-  box-shadow: 0 8px 24px rgba(var(--color-primary-rgb), 0.35);
-
-  &:hover {
-    transform: scale(1.05);
-    box-shadow: 0 12px 32px rgba(var(--color-primary-rgb), 0.45);
-  }
+  transition: all 0.2s;
 
   &:active {
-    transform: scale(0.98);
+    transform: scale(0.95);
   }
 
   &.playing {
-    background: linear-gradient(135deg, var(--color-success) 0%, #3dd477 100%);
-    box-shadow: 0 8px 24px rgba(45, 138, 94, 0.35);
-    animation: pulse 1s infinite;
-  }
-}
-
-.sound-wave {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  border: 2px solid currentColor;
-  opacity: 0;
-  animation: soundWave 1.5s ease-out infinite;
-
-  &.delay-1 {
-    animation-delay: 0.3s;
-  }
-
-  &.delay-2 {
-    animation-delay: 0.6s;
-  }
-}
-
-@keyframes soundWave {
-  0% {
-    transform: scale(1);
-    opacity: 0.6;
-  }
-  100% {
-    transform: scale(1.8);
-    opacity: 0;
+    background: linear-gradient(135deg, #67c23a, #85ce61);
   }
 }
 
 .sound-hint {
-  font-size: 0.8125rem;
-  color: var(--color-text-muted);
+  font-size: 12px;
+  color: #909399;
 }
 
 /* 输入区域 */
 .input-section {
-  flex: 1;
+  margin-top: 16px;
 }
 
 .input-area {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .input-wrapper {
@@ -1117,98 +974,76 @@ watch(userInput, () => {
 
 .word-input {
   width: 100%;
-  min-height: 60px;
-  padding: 16px 50px 16px 20px;
-  background: var(--color-bg-paper);
-  border: 2px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  font-family: var(--font-mono);
-  font-size: 1.25rem;
-  font-weight: 500;
-  color: var(--color-text-primary);
+  padding: 12px 40px 12px 12px;
+  background: #f5f7fa;
+  border: 2px solid #e4e7ed;
+  border-radius: 8px;
+  font-size: 18px;
+  font-family: 'Courier New', monospace;
   text-align: center;
-  letter-spacing: 0.1em;
-  transition: all var(--transition-fast);
   box-sizing: border-box;
+  transition: all 0.2s;
 
   &:focus {
     outline: none;
-    border-color: var(--color-primary);
-    box-shadow: 0 0 0 4px rgba(var(--color-primary-rgb), 0.1);
+    border-color: #667eea;
+    background: #fff;
   }
 
   &::placeholder {
-    color: var(--color-text-light);
-    font-weight: 400;
-    letter-spacing: normal;
+    color: #c0c4cc;
+    font-size: 14px;
   }
 }
 
 .clear-btn {
   position: absolute;
-  right: 16px;
+  right: 10px;
   top: 50%;
   transform: translateY(-50%);
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border: none;
-  background: var(--color-bg-muted);
+  background: #dcdfe6;
   border-radius: 50%;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-text-muted);
-  transition: all var(--transition-fast);
-
-  &:hover {
-    background: var(--color-border);
-    color: var(--color-text-primary);
-  }
+  color: #fff;
+  padding: 0;
 
   .el-icon {
-    font-size: 14px;
+    font-size: 12px;
   }
 }
 
 .submit-btn {
   width: 100%;
-  height: 52px;
-  font-size: 1rem;
-  font-weight: 600;
-  border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  background: linear-gradient(135deg, #667eea, #764ba2);
   border: none;
-  box-shadow: 0 4px 16px rgba(var(--color-primary-rgb), 0.3);
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(var(--color-primary-rgb), 0.4);
-  }
+  color: #fff;
 }
 
 /* 结果区域 */
 .result-area {
+  margin-top: 16px;
   text-align: center;
 }
 
 .result-box {
-  background: var(--color-bg-paper);
-  border-radius: var(--radius-xl);
-  padding: 24px;
-  margin-bottom: 20px;
-  box-shadow: var(--shadow-md);
-  border: 1px solid var(--color-border-light);
-  animation: fadeInUp 0.3s ease;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
 
   &.correct {
-    border-color: rgba(45, 138, 94, 0.2);
-    background: linear-gradient(135deg, rgba(45, 138, 94, 0.03) 0%, rgba(45, 138, 94, 0.08) 100%);
+    background: #f0f9eb;
+    border: 1px solid #b3e19d;
   }
 
   &.wrong {
-    border-color: rgba(196, 84, 74, 0.2);
-    background: linear-gradient(135deg, rgba(196, 84, 74, 0.03) 0%, rgba(196, 84, 74, 0.08) 100%);
+    background: #fef0f0;
+    border: 1px solid #fbc4c4;
   }
 }
 
@@ -1216,100 +1051,84 @@ watch(userInput, () => {
   margin-bottom: 8px;
 
   .el-icon {
-    color: var(--color-success);
+    color: #67c23a;
   }
 
   .wrong & .el-icon {
-    color: var(--color-danger);
+    color: #f56c6c;
   }
 }
 
 .result-text {
-  font-family: var(--font-display);
-  font-size: 1.25rem;
+  display: block;
+  font-size: 16px;
   font-weight: 600;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 
   .correct & {
-    color: var(--color-success);
+    color: #67c23a;
   }
 
   .wrong & {
-    color: var(--color-danger);
+    color: #f56c6c;
   }
 }
 
 .answer-comparison {
-  background: var(--color-bg-muted);
-  border-radius: var(--radius-lg);
-  padding: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 6px;
 }
 
 .answer-row {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 16px;
-  padding: 8px 0;
+  gap: 12px;
+  padding: 6px 0;
 
   &:not(:last-child) {
-    border-bottom: 1px solid var(--color-border-light);
+    border-bottom: 1px solid #ebeef5;
   }
 }
 
 .answer-label {
-  font-size: 0.8125rem;
-  color: var(--color-text-muted);
-  min-width: 70px;
-  text-align: right;
+  font-size: 12px;
+  color: #909399;
 }
 
 .answer-value {
-  font-family: var(--font-mono);
-  font-size: 1.25rem;
+  font-family: 'Courier New', monospace;
+  font-size: 16px;
   font-weight: 600;
-  padding: 4px 16px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-paper);
-  min-width: 120px;
+  padding: 4px 12px;
+  background: #fff;
+  border-radius: 4px;
 
   &.correct {
-    color: var(--color-success);
+    color: #67c23a;
   }
 
   &.wrong {
-    color: var(--color-danger);
+    color: #f56c6c;
   }
 }
 
 .next-btn {
   width: 100%;
-  height: 52px;
-  font-size: 1rem;
-  font-weight: 600;
-  border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+  background: linear-gradient(135deg, #667eea, #764ba2);
   border: none;
-  box-shadow: 0 4px 16px rgba(var(--color-primary-rgb), 0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(var(--color-primary-rgb), 0.4);
-  }
+  color: #fff;
 }
 
 .keyboard-hint {
-  margin-top: 16px;
+  margin-top: 12px;
+  color: #909399;
+  font-size: 12px;
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 8px;
-  color: var(--color-text-muted);
-  font-size: 0.8125rem;
+  gap: 6px;
 }
 
 .key {
@@ -1319,55 +1138,41 @@ watch(userInput, () => {
 }
 
 .key-label {
-  display: inline-block;
-  padding: 2px 8px;
-  background: var(--color-bg-muted);
-  border: 1px solid var(--color-border);
+  padding: 2px 6px;
+  background: #f5f7fa;
+  border: 1px solid #dcdfe6;
   border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.05);
+  font-size: 11px;
+  font-family: monospace;
 }
 
 .key-divider {
-  width: 1px;
-  height: 16px;
-  background: var(--color-border);
+  color: #c0c4cc;
 }
 
-/* 对话框 */
+/* 轮次结果对话框 */
 .round-result {
   text-align: center;
   padding: 16px 0;
+
+  .el-icon {
+    margin-bottom: 12px;
+  }
 }
 
-.result-icon-large {
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 20px;
+.correct-icon {
+  color: #67c23a;
+}
 
-  &.success {
-    background: linear-gradient(135deg, rgba(45, 138, 94, 0.1) 0%, rgba(45, 138, 94, 0.2) 100%);
-    color: var(--color-success);
-  }
-
-  &.warning {
-    background: linear-gradient(135deg, rgba(212, 134, 12, 0.1) 0%, rgba(212, 134, 12, 0.2) 100%);
-    color: var(--color-warning);
-  }
+.warning-icon {
+  color: #e6a23c;
 }
 
 .result-message {
-  font-size: 0.9375rem;
-  color: var(--color-text-secondary);
-  line-height: 1.6;
-  margin-bottom: 24px;
+  font-size: 14px;
+  color: #606266;
+  margin-bottom: 20px;
+  line-height: 1.5;
 }
 
 .round-stats {
@@ -1379,134 +1184,114 @@ watch(userInput, () => {
 .stat-item {
   text-align: center;
   padding: 12px 8px;
-  background: var(--color-bg-muted);
-  border-radius: var(--radius-md);
+  background: #f5f7fa;
+  border-radius: 8px;
 
   .stat-num {
     display: block;
-    font-family: var(--font-display);
-    font-size: 1.5rem;
+    font-size: 20px;
     font-weight: 700;
-    color: var(--color-text-primary);
-    line-height: 1.2;
+    color: #303133;
   }
 
   .stat-label {
     display: block;
-    font-size: 0.6875rem;
-    color: var(--color-text-muted);
+    font-size: 11px;
+    color: #909399;
     margin-top: 2px;
   }
 
   &.success .stat-num {
-    color: var(--color-success);
+    color: #67c23a;
   }
 
   &.danger .stat-num {
-    color: var(--color-danger);
+    color: #f56c6c;
   }
 }
 
 .dialog-btn {
   width: 100%;
-  height: 48px;
-  font-weight: 600;
-  border-radius: var(--radius-lg);
-}
-
-.quit-message {
-  color: var(--color-text-secondary);
-  text-align: center;
-  font-size: 0.9375rem;
-  line-height: 1.6;
 }
 
 /* 移动端适配 */
-@media (max-width: 768px) {
+@media (max-width: 480px) {
   .study-container {
-    padding: 16px;
-    padding-bottom: 100px;
-  }
-
-  .study-header {
-    padding: 16px;
-    margin-bottom: 16px;
-  }
-
-  .header-top {
-    margin-bottom: 12px;
-  }
-
-  .title-section h2 {
-    font-size: 1.125rem;
+    padding: 8px;
   }
 
   .word-card {
-    padding: 32px 20px;
-    margin-bottom: 20px;
+    padding: 16px 12px;
   }
 
-  .meaning-text {
-    font-size: 1.375rem;
+  .meaning {
+    font-size: 18px;
   }
 
-  .phonetic-text {
-    padding: 4px 12px;
+  .phonetic {
+    font-size: 13px;
   }
 
   .sound-btn {
-    width: 64px;
-    height: 64px;
+    width: 44px;
+    height: 44px;
   }
 
   .word-input {
-    min-height: 56px;
-    font-size: 1.125rem;
-    padding: 14px 44px 14px 16px;
-  }
-
-  .submit-btn,
-  .next-btn {
-    height: 48px;
-    font-size: 0.9375rem;
-  }
-
-  .result-box {
-    padding: 20px 16px;
-  }
-
-  .result-text {
-    font-size: 1.125rem;
+    font-size: 16px;
+    padding: 10px 36px 10px 10px;
   }
 
   .answer-value {
-    font-size: 1.125rem;
-    min-width: 100px;
+    font-size: 14px;
+    min-width: 80px;
   }
 
   .round-stats {
     grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
+    gap: 8px;
   }
 
   .stat-item .stat-num {
-    font-size: 1.25rem;
+    font-size: 18px;
   }
 }
 
-/* 横屏优化 */
-@media (orientation: landscape) and (max-width: 1024px) {
+/* 桌面端样式 */
+@media (min-width: 768px) {
   .study-container {
-    padding: 12px;
-    padding-bottom: 70px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 48px);
+  }
+
+  .study-header {
+    max-width: 500px;
+    width: 100%;
+    margin-bottom: 20px;
   }
 
   .word-card {
-    padding: 24px 20px;
+    max-width: 500px;
+    width: 100%;
+    padding: 32px 24px;
   }
 
-  .meaning-text {
-    font-size: 1.25rem;
+  .header-center h2 {
+    font-size: 18px;
+  }
+
+  .meaning {
+    font-size: 24px;
+    margin-bottom: 12px;
+  }
+
+  .phonetic {
+    font-size: 16px;
+    margin-bottom: 24px;
   }
 
   .sound-btn {
@@ -1514,8 +1299,24 @@ watch(userInput, () => {
     height: 56px;
   }
 
-  .round-stats {
-    grid-template-columns: repeat(4, 1fr);
+  .input-area {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .word-input {
+    font-size: 20px;
+  }
+
+  .submit-btn {
+    width: auto;
+    min-width: 100px;
+    height: 44px;
+  }
+
+  .next-btn {
+    width: auto;
+    min-width: 120px;
   }
 }
 </style>
