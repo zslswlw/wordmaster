@@ -56,22 +56,38 @@ def migrate():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # 1. 获取 words 表已有列名
-    cursor.execute("PRAGMA table_info(words)")
-    existing_cols = {row[1] for row in cursor.fetchall()}
+    # 检查 words 表是否存在
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='words'")
+    words_table_exists = cursor.fetchone() is not None
+    existing_tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
-    # 2. 添加缺失的列
-    for col_name, col_type, default in AI_COLUMNS:
-        if col_name not in existing_cols:
-            sql = f"ALTER TABLE words ADD COLUMN {col_name} {col_type} DEFAULT {default}"
-            cursor.execute(sql)
-            print(f"  ✓ 添加列: words.{col_name}")
-        else:
-            print(f"  - 已存在: words.{col_name}")
+    if not words_table_exists:
+        # 全新数据库: 用 SQLAlchemy create_all 建全量表（含最新 schema）
+        conn.close()
+        print("  全新数据库，使用 SQLAlchemy 创建所有表...")
+        from app.models import Base, engine
+        Base.metadata.create_all(bind=engine)
+        print("  ✓ 所有表已创建（包含最新 schema）")
+    else:
+        # 已存在数据库: 增量添加缺失的列
+        print("  检测到已有数据库，增量迁移...")
+        cursor.execute("PRAGMA table_info(words)")
+        existing_cols = {row[1] for row in cursor.fetchall()}
 
-    # 3. 创建新表
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    existing_tables = {row[0] for row in cursor.fetchall()}
+        for col_name, col_type, default in AI_COLUMNS:
+            if col_name not in existing_cols:
+                sql = f"ALTER TABLE words ADD COLUMN {col_name} {col_type} DEFAULT {default}"
+                cursor.execute(sql)
+                print(f"  ✓ 添加列: words.{col_name}")
+            else:
+                print(f"  - 已存在: words.{col_name}")
+
+    # 创建新表（幂等，兼容新旧数据库）
+    if not words_table_exists:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing_tables = {row[0] for row in cursor.fetchall()}
 
     for table_name, ddl in NEW_TABLES.items():
         if table_name not in existing_tables:
