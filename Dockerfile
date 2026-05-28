@@ -19,6 +19,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ .
 
+# 启动脚本（自动运行数据库迁移）
+RUN chmod +x /app/entrypoint.sh
+
 # 前端构建产物
 COPY --from=frontend-build /frontend/dist /app/static
 
@@ -30,4 +33,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
   CMD curl -f http://localhost:8000/api/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -4,9 +4,13 @@
 幂等: 可重复执行，已存在的列/表会自动跳过
 """
 import os
+import re
 import sqlite3
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "wordmaster.db")
+# 从 DATABASE_URL 提取路径，兼容 Docker 环境和本地开发
+_DB_URL = os.getenv("DATABASE_URL", "sqlite:///./wordmaster.db")
+_DB_PATH = re.sub(r"^sqlite:///", "", _DB_URL)
+DB_PATH = os.path.abspath(_DB_PATH)
 
 # AI 增强字段: (列名, SQL类型, 默认值)
 AI_COLUMNS = [
