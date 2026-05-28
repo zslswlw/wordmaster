@@ -36,6 +36,12 @@ app.include_router(audio.router)
 app.include_router(settings.router)
 app.include_router(ai.router)
 
+
+@app.get("/api/health")
+def health_check():
+    return {"status": "healthy"}
+
+
 # AI 生成图片静态目录
 AI_IMAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "ai_images")
 os.makedirs(AI_IMAGES_DIR, exist_ok=True)
@@ -49,8 +55,3 @@ else:
     @app.get("/")
     def root():
         return {"message": "WordMaster API is running"}
-
-
-@app.get("/api/health")
-def health_check():
-    return {"status": "healthy"}
