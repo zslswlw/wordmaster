@@ -1,8 +1,17 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime, date, timedelta
 from typing import List
 import random
+
+
+def _web_image_url(filepath: str) -> str | None:
+    """Convert filesystem path to web URL for frontend"""
+    if not filepath:
+        return None
+    filename = os.path.basename(filepath)
+    return f"/ai-images/{filename}"
 import json
 
 from ..models import get_db, User, WordBank, Word, StudyGroup, StudyRecord, ReviewPlan
@@ -13,6 +22,75 @@ from .study_refactored import get_study_words
 router = APIRouter(prefix="/api/study", tags=["study"])
 
 EBINGHAUS_INTERVALS = [1, 3, 7, 15, 30]
+MASTERY_THRESHOLD = 3  # 连续正确此次数后跳过复习
+
+
+def _get_consecutive_correct(db: Session, word_id: int, group_id: int) -> int:
+    """返回单词在指定学习组中连续正确的次数 (按 studied_at 倒序)"""
+    records = (
+        db.query(StudyRecord)
+        .filter(StudyRecord.word_id == word_id, StudyRecord.group_id == group_id)
+        .order_by(StudyRecord.studied_at.desc())
+        .all()
+    )
+    count = 0
+    for r in records:
+        if r.correct:
+            count += 1
+        else:
+            break
+    return count
+
+
+def _adapt_next_review_interval(db: Session, group_id: int, group: StudyGroup) -> None:
+    """自适应调整下一次复习计划的间隔。
+
+    根据全组单词的掌握程度 (连续正确率) 延长下次复习的天数。
+    掌握度越高，间隔延长越多 (最多 ×1.5)。
+    """
+    words = db.query(Word).filter(
+        Word.bank_id == group.bank_id,
+        Word.seq_num >= group.start_seq,
+        Word.seq_num <= group.end_seq
+    ).all()
+    if not words:
+        return
+
+    # 计算掌握率：连续正确 ≥ MASTERY_THRESHOLD 的单词占比
+    mastered = sum(1 for w in words if _get_consecutive_correct(db, w.id, group_id) >= MASTERY_THRESHOLD)
+    mastery_rate = mastered / len(words)
+
+    # 低于 60% 不延长；60%-100% 线性映射到 ×1.0-×1.5
+    if mastery_rate < 0.6:
+        return
+
+    factor = 1.0 + (mastery_rate - 0.6) * 1.25  # 0.6→1.0, 1.0→1.5
+
+    next_plan = (
+        db.query(ReviewPlan)
+        .filter(
+            ReviewPlan.group_id == group_id,
+            ReviewPlan.status == "pending"
+        )
+        .order_by(ReviewPlan.review_date.asc())
+        .first()
+    )
+    if not next_plan:
+        return
+
+    # 计算当前间隔 (original_date 到 review_date 的天数)
+    current_interval = (next_plan.review_date - next_plan.original_date).days
+    if current_interval <= 0:
+        return
+
+    new_interval = max(current_interval, int(current_interval * factor))
+    extra_days = new_interval - current_interval
+    if extra_days <= 0:
+        return
+
+    next_plan.review_date = next_plan.review_date + timedelta(days=extra_days)
+    next_plan.postponed_days = (next_plan.postponed_days or 0) + extra_days
+    db.commit()
 
 
 @router.post("/start/{group_id}")
@@ -68,13 +146,28 @@ def start_study(
         existing_records=existing_records,
         study_type=query_study_type
     )
-    
-    random.shuffle(study_word_ids)
-    
+
+    # 自适应复习: 跳过已掌握单词 (连续正确 ≥ MASTERY_THRESHOLD)
+    skipped_mastered: list[int] = []
+    if is_review and study_word_ids:
+        to_skip = []
+        for wid in study_word_ids:
+            if _get_consecutive_correct(db, wid, group_id) >= MASTERY_THRESHOLD:
+                to_skip.append(wid)
+        if to_skip:
+            study_word_ids = [w for w in study_word_ids if w not in to_skip]
+            skipped_mastered = to_skip
+        # 全部跳过 → 视为完成
+        if not study_word_ids:
+            is_completed = True
+
+    random.shuffle(study_word_ids) if study_word_ids else None
+
     return {
         "group_id": group_id,
         "group_name": group.name,
         "total_words": len(study_word_ids),
+        "skipped_mastered": len(skipped_mastered),
         "current_round": current_round,
         "word_ids": study_word_ids,
         "is_completed": is_completed
@@ -94,7 +187,17 @@ def get_word(
         "id": word.id,
         "word": word.word,
         "phonetic": word.phonetic,
-        "meaning": word.meaning
+        "meaning": word.meaning,
+        "example_l1": word.example_l1,
+        "example_l2": word.example_l2,
+        "example_l3": word.example_l3,
+        "mnemonic": word.mnemonic,
+        "etymology": word.etymology,
+        "word_family": word.word_family,
+        "synonyms": word.synonyms,
+        "image_url": _web_image_url(word.image_url),
+        "image_prompt": word.image_prompt,
+        "enriched": word.enriched,
     }
 
 
@@ -179,7 +282,6 @@ def complete_round(
         
         if wrong_count == 0:
             # 当前轮次全部正确，复习完成
-            # 更新复习计划状态为已完成
             if plan_id:
                 review_plan = db.query(ReviewPlan).filter(
                     ReviewPlan.id == plan_id,
@@ -189,6 +291,9 @@ def complete_round(
                     review_plan.status = "completed"
                     review_plan.completed_at = datetime.utcnow()
                     db.commit()
+
+                    # 自适应间隔：根据掌握程度延长下次复习间隔
+                    _adapt_next_review_interval(db, group_id, group)
             return {"message": "Review completed successfully", "status": "completed", "next_step": "completed"}
         else:
             # 复习还有错误，继续下一轮复习（像新学一样）

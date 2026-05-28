@@ -70,3 +70,6 @@ desktop.ini
 *.zip
 *.bak
 *.backup
+
+# AI generated images (not source code)
+ai_images/

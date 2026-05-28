@@ -16,7 +16,6 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useResponsive } from '../composables/useResponsive'
 import { 
@@ -58,7 +57,7 @@ const handleClick = (item: typeof menuItems[0]) => {
   left: 0;
   right: 0;
   height: 56px;
-  background: #fff;
+  background: var(--color-bg-paper);
   display: flex;
   justify-content: space-around;
   align-items: center;
@@ -75,7 +74,7 @@ const handleClick = (item: typeof menuItems[0]) => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.2s;
@@ -86,7 +85,7 @@ const handleClick = (item: typeof menuItems[0]) => {
   }
   
   &.active {
-    color: #667eea;
+    color: var(--color-primary);
     
     .el-icon {
       transform: scale(1.1);

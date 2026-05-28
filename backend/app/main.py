@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from .routers import auth, banks, groups, study, review, backup, audio
+from .routers import auth, banks, groups, study, review, backup, audio, settings, ai
 
 app = FastAPI(title="WordMaster API", description="背单词系统后端API")
 
@@ -13,8 +14,6 @@ if ENV == "production":
     allow_origins = [
         "http://localhost",
         "http://127.0.0.1",
-        # 添加你的生产域名，例如：
-        # "https://your-domain.com",
     ]
 else:
     allow_origins = ["*"]
@@ -34,11 +33,22 @@ app.include_router(study.router)
 app.include_router(review.router)
 app.include_router(backup.router)
 app.include_router(audio.router)
+app.include_router(settings.router)
+app.include_router(ai.router)
 
+# AI 生成图片静态目录
+AI_IMAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "ai_images")
+os.makedirs(AI_IMAGES_DIR, exist_ok=True)
+app.mount("/ai-images", StaticFiles(directory=AI_IMAGES_DIR), name="ai_images")
 
-@app.get("/")
-def root():
-    return {"message": "WordMaster API is running"}
+# 生产环境: 托管前端静态文件
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+else:
+    @app.get("/")
+    def root():
+        return {"message": "WordMaster API is running"}
 
 
 @app.get("/api/health")

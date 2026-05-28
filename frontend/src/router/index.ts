@@ -9,6 +9,7 @@ import Study from '../views/Study.vue'
 import Review from '../views/Review.vue'
 import Backup from '../views/Backup.vue'
 import AudioManage from '../views/AudioManage.vue'
+import Settings from '../views/Settings.vue'
 
 const routes = [
   {
@@ -58,6 +59,12 @@ const routes = [
         name: 'AudioManage',
         component: AudioManage,
         meta: { title: '音频管理' }
+      },
+      {
+        path: 'settings',
+        name: 'Settings',
+        component: Settings,
+        meta: { title: 'AI 设置' }
       }
     ]
   },

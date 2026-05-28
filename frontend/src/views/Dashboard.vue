@@ -1,144 +1,45 @@
 <template>
-  <div class="dashboard-container">
-    <!-- 统计卡片 -->
-    <el-row :gutter="12" class="stats-row">
-      <el-col :xs="12" :sm="12" :md="6" :lg="6">
-        <el-card class="stat-card" shadow="hover">
-          <div class="stat-icon" style="background-color: #409eff;">
-            <el-icon :size="isMobile ? 24 : 32" color="#fff"><Collection /></el-icon>
-          </div>
-          <div class="stat-info">
-            <div class="stat-value">{{ stats.banks }}</div>
-            <div class="stat-label">词库</div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="12" :sm="12" :md="6" :lg="6">
-        <el-card class="stat-card" shadow="hover">
-          <div class="stat-icon" style="background-color: #67c23a;">
-            <el-icon :size="isMobile ? 24 : 32" color="#fff"><FolderOpened /></el-icon>
-          </div>
-          <div class="stat-info">
-            <div class="stat-value">{{ stats.groups }}</div>
-            <div class="stat-label">学习组</div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="12" :sm="12" :md="6" :lg="6">
-        <el-card class="stat-card" shadow="hover">
-          <div class="stat-icon" style="background-color: #e6a23c;">
-            <el-icon :size="isMobile ? 24 : 32" color="#fff"><Calendar /></el-icon>
-          </div>
-          <div class="stat-info">
-            <div class="stat-value">{{ stats.todayReview }}</div>
-            <div class="stat-label">今日复习</div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="12" :sm="12" :md="6" :lg="6">
-        <el-card class="stat-card" shadow="hover">
-          <div class="stat-icon" style="background-color: #f56c6c;">
-            <el-icon :size="isMobile ? 24 : 32" color="#fff"><Trophy /></el-icon>
-          </div>
-          <div class="stat-info">
-            <div class="stat-value">{{ stats.completed }}</div>
-            <div class="stat-label">已完成</div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+  <div class="dash">
+    <div class="welcome">
+      <div class="w-left">
+        <h1>你好</h1>
+        <p class="w-sub">今天也要坚持学习</p>
+      </div>
+      <div class="w-date">
+        <span class="w-day">{{ day }}</span>
+        <span class="w-month">{{ month }}</span>
+      </div>
+    </div>
 
-    <!-- 快速操作 -->
-    <el-row class="action-row">
-      <el-col :span="24">
-        <el-card>
-          <template #header>
-            <div class="card-header">
-              <span>快速开始</span>
-            </div>
-          </template>
-          <div class="quick-actions">
-            <div class="action-item" @click="goToBanks">
-              <div class="action-icon-large" style="background-color: #ecf5ff;">
-                <el-icon :size="isMobile ? 28 : 40" color="#409eff"><Plus /></el-icon>
-              </div>
-              <div class="action-title">导入词库</div>
-              <div class="action-desc" v-if="!isMobile">添加新单词</div>
-            </div>
-            <div class="action-item" @click="goToGroups">
-              <div class="action-icon-large" style="background-color: #f0f9eb;">
-                <el-icon :size="isMobile ? 28 : 40" color="#67c23a"><VideoPlay /></el-icon>
-              </div>
-              <div class="action-title">开始学习</div>
-              <div class="action-desc" v-if="!isMobile">创建学习组</div>
-            </div>
-            <div class="action-item" @click="goToReview">
-              <div class="action-icon-large" style="background-color: #fdf6ec;">
-                <el-icon :size="isMobile ? 28 : 40" color="#e6a23c"><RefreshRight /></el-icon>
-              </div>
-              <div class="action-title">今日复习</div>
-              <div class="action-desc" v-if="!isMobile">查看计划</div>
-            </div>
-            <div class="action-item" @click="goToBackup">
-              <div class="action-icon-large" style="background-color: #fef0f0;">
-                <el-icon :size="isMobile ? 28 : 40" color="#f56c6c"><Download /></el-icon>
-              </div>
-              <div class="action-title">数据备份</div>
-              <div class="action-desc" v-if="!isMobile">备份数据</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <div class="stat-row">
+      <div class="stat" v-for="(s, i) in statItems" :key="i">
+        <span class="s-val">{{ s.val }}</span>
+        <span class="s-label">{{ s.label }}</span>
+      </div>
+    </div>
 
-    <!-- 学习提示和系统说明 -->
-    <el-row :gutter="12" class="info-row">
-      <el-col :xs="24" :sm="24" :md="12">
-        <el-card>
-          <template #header>
-            <div class="card-header">
-              <span>学习提示</span>
-            </div>
-          </template>
-          <div class="tips-list">
-            <div class="tip-item">
-              <el-icon color="#409eff"><InfoFilled /></el-icon>
-              <span>建议每天学习20-50个新单词</span>
-            </div>
-            <div class="tip-item">
-              <el-icon color="#67c23a"><InfoFilled /></el-icon>
-              <span>按照艾宾浩斯遗忘曲线复习</span>
-            </div>
-            <div class="tip-item">
-              <el-icon color="#e6a23c"><InfoFilled /></el-icon>
-              <span>听写时认真听发音，多练习</span>
-            </div>
-            <div class="tip-item">
-              <el-icon color="#f56c6c"><InfoFilled /></el-icon>
-              <span>定期备份数据防止丢失</span>
-            </div>
+    <div class="section">
+      <h3 class="sec-title">快速开始</h3>
+      <div class="actions">
+        <button class="act" v-for="a in actions" :key="a.label" @click="a.fn">
+          <span class="act-icon"><el-icon><component :is="a.icon" /></el-icon></span>
+          <span class="act-label">{{ a.label }}</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3 class="sec-title">学习流程</h3>
+      <div class="steps">
+        <div class="step" v-for="(st, i) in steps" :key="i">
+          <span class="step-num">{{ i + 1 }}</span>
+          <div class="step-text">
+            <span class="step-title">{{ st.title }}</span>
+            <span class="step-desc">{{ st.desc }}</span>
           </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="24" :md="12">
-        <el-card>
-          <template #header>
-            <div class="card-header">
-              <span>系统说明</span>
-            </div>
-          </template>
-          <div class="system-info">
-            <p><strong>学习流程：</strong></p>
-            <ol>
-              <li>导入词库 - 上传CSV格式的单词文件</li>
-              <li>创建学习组 - 选择学习范围和单词数量</li>
-              <li>开始学习 - 听写单词，系统自动判定</li>
-              <li>复习巩固 - 按记忆曲线自动安排复习</li>
-            </ol>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -146,291 +47,101 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { bankAPI, groupAPI, reviewAPI } from '../api'
-import { useResponsive } from '../composables/useResponsive'
-import { 
-  Collection, 
-  FolderOpened, 
-  Calendar, 
-  Trophy, 
-  Plus, 
-  VideoPlay, 
-  RefreshRight, 
-  Download,
-  InfoFilled
-} from '@element-plus/icons-vue'
+import { Plus, VideoPlay, RefreshRight, Download } from '@element-plus/icons-vue'
 
 const router = useRouter()
-const { isMobile } = useResponsive()
+const day = new Date().getDate()
+const month = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'][new Date().getMonth()]
 
-const stats = ref({
-  banks: 0,
-  groups: 0,
-  todayReview: 0,
-  completed: 0
-})
+const statItems = ref([
+  { val: 0, label: '词库' },
+  { val: 0, label: '学习组' },
+  { val: 0, label: '今日复习' },
+  { val: 0, label: '已完成' },
+])
+
+const actions = [
+  { label: '导入词库', icon: Plus, fn: () => router.push('/banks') },
+  { label: '开始学习', icon: VideoPlay, fn: () => router.push('/groups') },
+  { label: '今日复习', icon: RefreshRight, fn: () => router.push('/review') },
+  { label: '数据备份', icon: Download, fn: () => router.push('/backup') },
+]
+
+const steps = [
+  { title: '导入词库', desc: '上传CSV格式的单词文件' },
+  { title: '创建学习组', desc: '选择学习范围和数量' },
+  { title: '开始学习', desc: '听写单词，自动判定' },
+  { title: '复习巩固', desc: '按记忆曲线自动安排' },
+]
 
 onMounted(async () => {
-  await loadStats()
-})
-
-const loadStats = async () => {
   try {
-    const [banksRes, groupsRes, reviewRes] = await Promise.all([
-      bankAPI.getAll(),
-      groupAPI.getAll(),
-      reviewAPI.getToday()
-    ])
-    
+    const [banksRes, groupsRes, reviewRes] = await Promise.all([bankAPI.getAll(), groupAPI.getAll(), reviewAPI.getToday()])
     const banks = Array.isArray(banksRes.data) ? banksRes.data : []
     const groups = Array.isArray(groupsRes.data) ? groupsRes.data : []
     const reviews = Array.isArray(reviewRes.data) ? reviewRes.data : []
-    
-    stats.value.banks = banks.length
-    stats.value.groups = groups.length
-    stats.value.todayReview = reviews.length
-    stats.value.completed = groups.filter((g: any) => g.status === 'completed').length
-  } catch (error) {
-    console.error('加载统计数据失败', error)
-  }
-}
-
-const goToBanks = () => router.push('/banks')
-const goToGroups = () => router.push('/groups')
-const goToReview = () => router.push('/review')
-const goToBackup = () => router.push('/backup')
+    statItems.value[0].val = banks.length
+    statItems.value[1].val = groups.length
+    statItems.value[2].val = reviews.length
+    statItems.value[3].val = groups.filter((g: any) => g.status === 'completed').length
+  } catch { /* ignore */ }
+})
 </script>
 
 <style scoped lang="scss">
-.dashboard-container {
-  padding: 0;
-}
+.dash { max-width: 640px; margin: 0 auto; }
 
-.stats-row {
-  margin-bottom: 12px;
+// welcome
+.welcome {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 8px 0 32px;
+  h1 { font-size: 1.5rem; font-weight: 600; color: var(--color-text-primary); margin: 0; }
 }
+.w-sub { color: var(--color-text-muted); font-size: 0.8125rem; margin: 4px 0 0; }
+.w-date { text-align: center; }
+.w-day { display: block; font-size: 2.25rem; font-weight: 600; color: var(--color-text-primary); line-height: 1; }
+.w-month { display: block; font-size: 0.6875rem; color: var(--color-text-muted); margin-top: 2px; }
 
-.stat-card {
-  display: flex;
-  align-items: center;
-  padding: 16px;
-  margin-bottom: 12px;
-  
-  :deep(.el-card__body) {
-    padding: 0;
-    display: flex;
-    align-items: center;
-    width: 100%;
-  }
+// stats
+.stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 32px; }
+.stat { text-align: center; padding: 16px 8px; background: var(--color-bg-paper); border-radius: 8px; border: 1px solid var(--color-border-light); }
+.s-val { display: block; font-size: 1.5rem; font-weight: 700; color: var(--color-text-primary); }
+.s-label { display: block; font-size: 0.6875rem; color: var(--color-text-muted); margin-top: 2px; }
+
+// sections
+.section { margin-bottom: 32px; }
+.sec-title { font-size: 0.875rem; font-weight: 600; color: var(--color-text-muted); margin: 0 0 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+// actions
+.actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.act {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 16px 8px; background: var(--color-bg-paper); border: 1px solid var(--color-border-light);
+  border-radius: 8px; cursor: pointer; transition: background 0.15s;
+  &:hover { background: var(--color-bg-muted); }
 }
-
-.stat-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 12px;
-  flex-shrink: 0;
+.act-icon {
+  width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--color-bg-muted); color: var(--color-text-secondary); font-size: 20px;
 }
+.act-label { font-size: 0.75rem; color: var(--color-text-secondary); }
 
-.stat-info {
-  flex: 1;
-  min-width: 0;
+// steps
+.steps { display: flex; flex-direction: column; gap: 1px; background: var(--color-border-light); border-radius: 8px; overflow: hidden; }
+.step {
+  display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+  background: var(--color-bg-paper);
 }
-
-.stat-value {
-  font-size: 24px;
-  font-weight: bold;
-  color: #303133;
-  line-height: 1.2;
+.step-num {
+  width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--color-text-primary); color: var(--color-bg-paper); font-size: 0.75rem; font-weight: 600; flex-shrink: 0;
 }
+.step-text { display: flex; flex-direction: column; }
+.step-title { font-size: 0.875rem; font-weight: 500; color: var(--color-text-primary); }
+.step-desc { font-size: 0.75rem; color: var(--color-text-muted); }
 
-.stat-label {
-  font-size: 13px;
-  color: #909399;
-  margin-top: 2px;
-}
-
-.action-row {
-  margin-bottom: 12px;
-}
-
-.card-header {
-  font-weight: bold;
-  font-size: 16px;
-}
-
-.quick-actions {
-  display: flex;
-  justify-content: space-around;
-  padding: 10px 0;
-}
-
-.action-item {
-  text-align: center;
-  cursor: pointer;
-  padding: 12px 8px;
-  border-radius: 12px;
-  transition: all 0.3s;
-  flex: 1;
-  max-width: 100px;
-  
-  &:active {
-    transform: scale(0.95);
-    background-color: #f5f7fa;
-  }
-  
-  &:hover {
-    background-color: #f5f7fa;
-  }
-}
-
-.action-icon-large {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 8px;
-}
-
-.action-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #303133;
-}
-
-.action-desc {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 2px;
-}
-
-.info-row {
-  .el-col {
-    margin-bottom: 12px;
-  }
-}
-
-.tips-list {
-  padding: 5px 0;
-}
-
-.tip-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px solid #ebeef5;
-  font-size: 14px;
-  
-  &:last-child {
-    border-bottom: none;
-  }
-  
-  span {
-    color: #606266;
-  }
-}
-
-.system-info {
-  color: #606266;
-  line-height: 1.8;
-  font-size: 14px;
-  
-  ol {
-    padding-left: 18px;
-    margin: 8px 0;
-  }
-  
-  li {
-    margin: 6px 0;
-  }
-}
-
-// 桌面端样式
-@media (min-width: 768px) {
-  .stats-row {
-    margin-bottom: 20px;
-  }
-  
-  .stat-card {
-    margin-bottom: 0;
-    padding: 20px;
-    
-    :deep(.el-card__body) {
-      padding: 0;
-    }
-  }
-  
-  .stat-icon {
-    width: 64px;
-    height: 64px;
-    margin-right: 16px;
-  }
-  
-  .stat-value {
-    font-size: 28px;
-  }
-  
-  .stat-label {
-    font-size: 14px;
-    margin-top: 4px;
-  }
-  
-  .action-row {
-    margin-bottom: 20px;
-  }
-  
-  .quick-actions {
-    padding: 20px 0;
-  }
-  
-  .action-item {
-    padding: 20px;
-    max-width: 120px;
-    
-    &:hover {
-      transform: translateY(-4px);
-    }
-  }
-  
-  .action-icon-large {
-    width: 80px;
-    height: 80px;
-    margin-bottom: 16px;
-  }
-  
-  .action-title {
-    font-size: 16px;
-    margin-bottom: 4px;
-  }
-  
-  .info-row .el-col {
-    margin-bottom: 0;
-  }
-}
-
-// 横屏优化
-@media (orientation: landscape) and (max-width: 1024px) {
-  .stat-card {
-    padding: 12px;
-  }
-  
-  .stat-icon {
-    width: 40px;
-    height: 40px;
-  }
-  
-  .action-item {
-    padding: 10px;
-  }
-  
-  .action-icon-large {
-    width: 48px;
-    height: 48px;
-  }
+@media (max-width: 480px) {
+  .stat-row { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .actions { grid-template-columns: repeat(2, 1fr); gap: 8px; }
 }
 </style>

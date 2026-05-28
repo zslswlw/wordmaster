@@ -1,84 +1,37 @@
 <template>
-  <div class="audio-manage-container">
-    <el-card class="status-card">
-      <template #header>
-        <div class="card-header">
-          <span>音频管理</span>
-          <el-button 
-            type="primary" 
-            :loading="syncing"
-            @click="startSync"
-          >
-            <el-icon><Download /></el-icon>
-            同步音频
-          </el-button>
-        </div>
-      </template>
-      
-      <div class="status-overview">
-        <el-row :gutter="20">
-          <el-col :xs="24" :sm="8">
-            <div class="stat-item">
-              <div class="stat-value">{{ status.total_words }}</div>
-              <div class="stat-label">总单词数</div>
-            </div>
-          </el-col>
-          <el-col :xs="24" :sm="8">
-            <div class="stat-item">
-              <div class="stat-value has-audio">{{ status.has_audio }}</div>
-              <div class="stat-label">已有音频</div>
-            </div>
-          </el-col>
-          <el-col :xs="24" :sm="8">
-            <div class="stat-item">
-              <div class="stat-value missing">{{ status.missing }}</div>
-              <div class="stat-label">缺失音频</div>
-            </div>
-          </el-col>
-        </el-row>
-        
-        <div class="progress-section">
-          <div class="progress-header">
-            <span>音频覆盖率</span>
-            <span class="progress-value">{{ status.coverage }}</span>
-          </div>
-          <el-progress 
-            :percentage="coveragePercent" 
-            :status="progressStatus"
-            :stroke-width="20"
-          />
-        </div>
+  <div class="page">
+    <div class="page-top">
+      <h2>音频管理</h2>
+      <el-button type="primary" size="small" :loading="syncing" @click="startSync">
+        <el-icon><Download /></el-icon> 同步音频
+      </el-button>
+    </div>
+
+    <div class="stat-row">
+      <div class="stat"><span class="sv">{{ status.total_words }}</span><span class="sl">总单词</span></div>
+      <div class="stat green"><span class="sv">{{ status.has_audio }}</span><span class="sl">已有音频</span></div>
+      <div class="stat red"><span class="sv">{{ status.missing }}</span><span class="sl">缺失</span></div>
+    </div>
+
+    <div class="prog-section">
+      <div class="prog-top"><span>覆盖率</span><span class="prog-pct">{{ status.coverage }}</span></div>
+      <div class="prog-track"><div class="prog-fill" :style="{ width: pct + '%' }"></div></div>
+    </div>
+
+    <div v-if="status.missing_sample?.length" class="section">
+      <h3 class="sec-title">缺失音频（前10）</h3>
+      <div class="tags">
+        <span v-for="w in status.missing_sample" :key="w" class="tag">{{ w }}</span>
       </div>
-    </el-card>
-    
-    <el-card v-if="status.missing_sample?.length" class="missing-card">
-      <template #header>
-        <span>缺失音频的单词（前10个）</span>
-      </template>
-      <el-tag 
-        v-for="word in status.missing_sample" 
-        :key="word"
-        class="missing-word"
-        type="danger"
-        effect="plain"
-      >
-        {{ word }}
-      </el-tag>
-    </el-card>
-    
-    <el-card class="action-card">
-      <template #header>
-        <span>快捷操作</span>
-      </template>
-      <el-button @click="checkSpecificWord">
-        <el-icon><Search /></el-icon>
-        检查指定单词
-      </el-button>
-      <el-button @click="refreshStatus">
-        <el-icon><Refresh /></el-icon>
-        刷新状态
-      </el-button>
-    </el-card>
+    </div>
+
+    <div class="section">
+      <h3 class="sec-title">快捷操作</h3>
+      <div class="actions">
+        <button class="act" @click="checkSpecificWord"><el-icon><Search /></el-icon> 检查单词</button>
+        <button class="act" @click="refreshStatus"><el-icon><Refresh /></el-icon> 刷新</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -88,206 +41,83 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Search, Refresh } from '@element-plus/icons-vue'
 import axios from 'axios'
 
-interface AudioStatus {
-  total_words: number
-  has_audio: number
-  missing: number
-  coverage: string
-  audio_dir: string
-  missing_sample: string[]
-}
+interface AudioStatus { total_words: number; has_audio: number; missing: number; coverage: string; audio_dir: string; missing_sample: string[] }
 
-const status = ref<AudioStatus>({
-  total_words: 0,
-  has_audio: 0,
-  missing: 0,
-  coverage: '0%',
-  audio_dir: '',
-  missing_sample: []
-})
-
+const status = ref<AudioStatus>({ total_words: 0, has_audio: 0, missing: 0, coverage: '0%', audio_dir: '', missing_sample: [] })
 const syncing = ref(false)
 
-const coveragePercent = computed(() => {
-  if (status.value.total_words === 0) return 0
-  return Math.round((status.value.has_audio / status.value.total_words) * 100)
-})
-
-const progressStatus = computed(() => {
-  if (coveragePercent.value === 100) return 'success'
-  if (coveragePercent.value >= 80) return ''
-  return 'exception'
-})
+const pct = computed(() => status.value.total_words === 0 ? 0 : Math.round((status.value.has_audio / status.value.total_words) * 100))
 
 const fetchStatus = async () => {
   try {
     const token = localStorage.getItem('token')
-    const response = await axios.get('/api/audio/status', {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    status.value = response.data
-  } catch (error) {
-    ElMessage.error('获取音频状态失败')
-  }
+    const r = await axios.get('/api/audio/status', { headers: { Authorization: `Bearer ${token}` } })
+    status.value = r.data
+  } catch { ElMessage.error('获取状态失败') }
 }
 
 const startSync = async () => {
+  syncing.value = true
   try {
-    syncing.value = true
     const token = localStorage.getItem('token')
-    await axios.post('/api/audio/sync', {}, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    ElMessage.success('音频同步任务已启动，请稍后刷新查看进度')
-  } catch (error) {
-    ElMessage.error('启动同步失败')
-  } finally {
-    syncing.value = false
-  }
+    await axios.post('/api/audio/sync', {}, { headers: { Authorization: `Bearer ${token}` } })
+    ElMessage.success('同步已启动，请稍后刷新')
+  } catch { ElMessage.error('启动同步失败') }
+  finally { syncing.value = false }
 }
 
 const checkSpecificWord = async () => {
   try {
-    const { value: word } = await ElMessageBox.prompt(
-      '请输入要检查的单词',
-      '检查单词音频',
-      {
-        confirmButtonText: '检查',
-        cancelButtonText: '取消',
-        inputPattern: /\S+/,
-        inputErrorMessage: '请输入单词'
-      }
-    )
-    
+    const { value: word } = await ElMessageBox.prompt('请输入要检查的单词', '检查单词', { confirmButtonText: '检查', cancelButtonText: '取消', inputPattern: /\S+/, inputErrorMessage: '请输入单词' })
     const token = localStorage.getItem('token')
-    const response = await axios.get(`/api/audio/check/${word}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    
-    if (response.data.exists) {
-      ElMessage.success(`单词 "${word}" 已有音频`)
-    } else {
-      ElMessage.warning(`单词 "${word}" 缺少音频`)
-      
-      // 询问是否下载
+    const r = await axios.get(`/api/audio/check/${word}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (r.data.exists) ElMessage.success(`"${word}" 已有音频`)
+    else {
+      ElMessage.warning(`"${word}" 缺少音频`)
       try {
-        await ElMessageBox.confirm(
-          `是否立即下载 "${word}" 的音频？`,
-          '下载音频',
-          { confirmButtonText: '下载', cancelButtonText: '取消' }
-        )
-        
-        await axios.post(`/api/audio/sync-word/${word}`, {}, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-        ElMessage.success(`"${word}" 音频下载成功`)
-        fetchStatus()
-      } catch {
-        // 用户取消下载
-      }
+        await ElMessageBox.confirm(`是否下载"${word}"的音频？`, '下载', { confirmButtonText: '下载' })
+        await axios.post(`/api/audio/sync-word/${word}`, {}, { headers: { Authorization: `Bearer ${token}` } })
+        ElMessage.success('下载成功'); fetchStatus()
+      } catch { /* cancel */ }
     }
-  } catch {
-    // 用户取消输入
-  }
+  } catch { /* cancel */ }
 }
 
-const refreshStatus = () => {
-  fetchStatus()
-  ElMessage.success('状态已刷新')
-}
+const refreshStatus = () => { fetchStatus(); ElMessage.success('已刷新') }
 
-onMounted(() => {
-  fetchStatus()
-})
+onMounted(() => fetchStatus())
 </script>
 
-<style scoped>
-.audio-manage-container {
-  padding: 20px;
-  max-width: 1200px;
-  margin: 0 auto;
+<style scoped lang="scss">
+.page { max-width: 720px; margin: 0 auto; }
+.page-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;
+  h2 { font-size: 1.125rem; font-weight: 700; color: var(--color-text-primary); margin: 0; }
 }
 
-.status-card {
-  margin-bottom: 20px;
-}
+.stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px; }
+.stat { text-align: center; padding: 16px; background: var(--color-bg-paper); border: 1px solid var(--color-border-light); border-radius: 8px; }
+.sv { display: block; font-size: 1.5rem; font-weight: 700; color: var(--color-text-primary); }
+.sl { display: block; font-size: 0.6875rem; color: var(--color-text-muted); margin-top: 2px; }
+.green .sv { color: var(--color-success); }
+.red .sv { color: var(--color-danger); }
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
+.prog-section { margin-bottom: 24px; }
+.prog-top { display: flex; justify-content: space-between; font-size: 0.8125rem; color: var(--color-text-muted); margin-bottom: 6px; }
+.prog-pct { font-weight: 600; color: var(--color-text-primary); }
+.prog-track { height: 4px; background: var(--color-border-light); border-radius: 2px; overflow: hidden; }
+.prog-fill { height: 100%; background: var(--color-text-primary); transition: width 0.3s; }
 
-.status-overview {
-  padding: 20px 0;
-}
+.section { margin-bottom: 24px; }
+.sec-title { font-size: 0.8125rem; font-weight: 600; color: var(--color-text-muted); margin: 0 0 10px; text-transform: uppercase; letter-spacing: 0.05em; }
 
-.stat-item {
-  text-align: center;
-  padding: 20px;
-  background: #f5f7fa;
-  border-radius: 8px;
-  margin-bottom: 10px;
-}
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { padding: 4px 10px; background: rgba(var(--color-danger-rgb), 0.08); color: var(--color-danger); border-radius: 4px; font-size: 0.75rem; }
 
-.stat-value {
-  font-size: 32px;
-  font-weight: bold;
-  color: #409eff;
-  margin-bottom: 8px;
-}
-
-.stat-value.has-audio {
-  color: #67c23a;
-}
-
-.stat-value.missing {
-  color: #f56c6c;
-}
-
-.stat-label {
-  font-size: 14px;
-  color: #606266;
-}
-
-.progress-section {
-  margin-top: 30px;
-  padding: 20px;
-  background: #f5f7fa;
-  border-radius: 8px;
-}
-
-.progress-header {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 15px;
-  font-size: 16px;
-}
-
-.progress-value {
-  font-weight: bold;
-  color: #409eff;
-}
-
-.missing-card {
-  margin-bottom: 20px;
-}
-
-.missing-word {
-  margin: 5px;
-}
-
-.action-card {
-  margin-bottom: 20px;
-}
-
-@media (max-width: 768px) {
-  .audio-manage-container {
-    padding: 10px;
-  }
-  
-  .stat-value {
-    font-size: 24px;
-  }
+.actions { display: flex; gap: 8px; }
+.act {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
+  background: var(--color-bg-paper); border: 1px solid var(--color-border); border-radius: 6px;
+  font-size: 0.8125rem; color: var(--color-text-secondary); cursor: pointer;
+  &:hover { background: var(--color-bg-muted); }
 }
 </style>

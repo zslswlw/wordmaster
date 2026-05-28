@@ -1,0 +1,19 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wordmaster
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=production
+      - DATABASE_URL=sqlite:////app/data/wordmaster.db
+    volumes:
+      - wordmaster_data:/app/data
+      - wordmaster_images:/app/ai_images
+    restart: unless-stopped
+
+volumes:
+  wordmaster_data:
+  wordmaster_images:

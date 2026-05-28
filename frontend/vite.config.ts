@@ -5,15 +5,20 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig(({ mode }) => ({
   plugins: [vue()],
   server: mode === 'development' ? {
-    port: 5173,
+    port: 5178,
     host: '127.0.0.1', // 仅本地访问，生产环境不要暴露
-    // proxy: {
-    //   '/api': {
-    //     target: 'http://localhost:8000',
-    //     changeOrigin: true,
-    //     secure: false
-    //   }
-    // }
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8006',
+        changeOrigin: true,
+        secure: false
+      },
+      '/ai-images': {
+        target: 'http://localhost:8006',
+        changeOrigin: true,
+        secure: false
+      }
+    }
   } : undefined,
   build: {
     outDir: 'dist',

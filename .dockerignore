@@ -1,0 +1,10 @@
+node_modules
+__pycache__
+*.pyc
+.git
+.env
+*.db
+ai_images
+dist
+.vite
+*.md

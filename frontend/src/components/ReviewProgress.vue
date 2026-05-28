@@ -214,38 +214,30 @@ function getOverdueDays(reviewDate: string | null): number {
 <style scoped lang="scss">
 .review-progress {
   padding: 20px;
-  background: #f5f7fa;
-  border-radius: 8px;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
 
-  &.mobile {
-    padding: 12px;
-  }
+  &.mobile { padding: 12px; }
 }
 
 // 总体进度概览
 .progress-overview {
   margin-bottom: 24px;
   padding: 16px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  background: var(--color-bg-paper);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
 
-  .mobile & {
-    margin-bottom: 16px;
-    padding: 12px;
-  }
+  .mobile & { margin-bottom: 16px; padding: 12px; }
 }
 
 .progress-title {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--color-text-primary);
   margin-bottom: 12px;
 
-  .mobile & {
-    font-size: 14px;
-    margin-bottom: 8px;
-  }
+  .mobile & { font-size: 14px; margin-bottom: 8px; }
 }
 
 .progress-stats {
@@ -257,43 +249,34 @@ function getOverdueDays(reviewDate: string | null): number {
   .completed-count {
     font-size: 28px;
     font-weight: 700;
-    color: #67c23a;
+    color: var(--color-success);
 
-    .mobile & {
-      font-size: 24px;
-    }
+    .mobile & { font-size: 24px; }
   }
 
   .total-count {
     font-size: 16px;
-    color: #909399;
+    color: var(--color-text-muted);
 
-    .mobile & {
-      font-size: 14px;
-    }
+    .mobile & { font-size: 14px; }
   }
 
-  .status-tag {
-    margin-left: auto;
-  }
+  .status-tag { margin-left: auto; }
 }
 
 .overall-progress-bar {
-  :deep(.el-progress__text) {
-    font-weight: 600;
-  }
+  :deep(.el-progress__text) { font-weight: 600; }
 }
 
 // 水平时间线（桌面端/平板）
 .timeline-horizontal {
-  background: white;
-  border-radius: 8px;
+  background: var(--color-bg-paper);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
   padding: 24px;
   overflow-x: auto;
 
-  .tablet & {
-    padding: 16px;
-  }
+  .tablet & { padding: 16px; }
 }
 
 .timeline-track {
@@ -310,81 +293,59 @@ function getOverdueDays(reviewDate: string | null): number {
   position: relative;
   flex: 1;
 
-  &.first {
-    align-items: flex-start;
-  }
-
-  &.last {
-    align-items: flex-end;
-  }
+  &.first { align-items: flex-start; }
+  &.last { align-items: flex-end; }
 }
 
 .node-dot {
-  width: 40px;
-  height: 40px;
+  width: 40px; height: 40px;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 600;
   z-index: 2;
   transition: all 0.3s;
 
   .timeline-node.completed & {
-    background: #67c23a;
-    color: white;
+    background: var(--color-success);
+    color: #fff;
   }
-
   .timeline-node.today & {
-    background: #409eff;
-    color: white;
+    background: var(--color-primary);
+    color: #fff;
     animation: pulse 2s infinite;
   }
-
   .timeline-node.pending & {
-    background: #e4e7ed;
-    color: #909399;
+    background: var(--color-border);
+    color: var(--color-text-muted);
   }
-
   .timeline-node.overdue & {
-    background: #f56c6c;
-    color: white;
+    background: var(--color-danger);
+    color: #fff;
   }
-
   .timeline-node.not_created & {
-    background: #f5f7fa;
-    color: #c0c4cc;
-    border: 2px dashed #dcdfe6;
+    background: var(--color-bg-muted);
+    color: var(--color-text-light);
+    border: 2px dashed var(--color-border);
   }
 }
 
 @keyframes pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(64, 158, 255, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 10px rgba(64, 158, 255, 0);
-  }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--color-primary-rgb), 0.4); }
+  50% { box-shadow: 0 0 0 10px rgba(var(--color-primary-rgb), 0); }
 }
 
 .node-info {
   margin-top: 12px;
   text-align: center;
 
-  .timeline-node.first & {
-    text-align: left;
-  }
-
-  .timeline-node.last & {
-    text-align: right;
-  }
+  .timeline-node.first & { text-align: left; }
+  .timeline-node.last & { text-align: right; }
 }
 
 .node-day {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: var(--color-text-primary);
   margin-bottom: 4px;
 }
 
@@ -396,34 +357,29 @@ function getOverdueDays(reviewDate: string | null): number {
   display: inline-block;
 
   &.completed {
-    color: #67c23a;
-    background: #f0f9eb;
+    color: var(--color-success);
+    background: rgba(var(--color-success-rgb), 0.08);
   }
-
   &.today {
-    color: #409eff;
-    background: #ecf5ff;
+    color: var(--color-primary);
+    background: rgba(var(--color-primary-rgb), 0.08);
   }
-
-  &.pending {
-    color: #909399;
-  }
-
+  &.pending { color: var(--color-text-muted); }
   &.overdue {
-    color: #f56c6c;
-    background: #fef0f0;
+    color: var(--color-danger);
+    background: rgba(var(--color-danger-rgb), 0.06);
   }
 }
 
 .node-date {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-muted);
 }
 
 .postponed-badge {
   font-size: 10px;
-  color: #e6a23c;
-  background: #fdf6ec;
+  color: var(--color-warning);
+  background: rgba(var(--color-warning-rgb), 0.08);
   padding: 2px 6px;
   border-radius: 4px;
   margin-top: 4px;
@@ -435,164 +391,101 @@ function getOverdueDays(reviewDate: string | null): number {
   left: 50%;
   right: -50%;
   height: 2px;
-  background: #e4e7ed;
+  background: var(--color-border);
   z-index: 1;
 
-  &.completed {
-    background: #67c23a;
-  }
+  &.completed { background: var(--color-success); }
 }
 
 // 垂直时间线（手机端）
 .timeline-vertical {
-  background: white;
-  border-radius: 8px;
+  background: var(--color-bg-paper);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
   padding: 16px;
 }
 
 .timeline-item {
-  display: flex;
-  gap: 12px;
-  position: relative;
+  display: flex; gap: 12px; position: relative;
 
-  &:not(:last-child) {
-    margin-bottom: 16px;
-  }
+  &:not(:last-child) { margin-bottom: 16px; }
 }
 
 .item-left {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: flex; flex-direction: column; align-items: center;
 }
 
 .item-dot {
-  width: 32px;
-  height: 32px;
+  width: 32px; height: 32px;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 600;
   flex-shrink: 0;
 
-  &.completed {
-    background: #67c23a;
-    color: white;
-  }
-
-  &.today {
-    background: #409eff;
-    color: white;
-  }
-
-  &.pending {
-    background: #e4e7ed;
-    color: #909399;
-  }
-
-  &.overdue {
-    background: #f56c6c;
-    color: white;
-  }
-
+  &.completed { background: var(--color-success); color: #fff; }
+  &.today { background: var(--color-primary); color: #fff; }
+  &.pending { background: var(--color-border); color: var(--color-text-muted); }
+  &.overdue { background: var(--color-danger); color: #fff; }
   &.not_created {
-    background: #f5f7fa;
-    color: #c0c4cc;
-    border: 2px dashed #dcdfe6;
+    background: var(--color-bg-muted);
+    color: var(--color-text-light);
+    border: 2px dashed var(--color-border);
   }
 }
 
 .item-line {
-  width: 2px;
-  flex: 1;
-  background: #e4e7ed;
+  width: 2px; flex: 1;
+  background: var(--color-border);
   margin: 4px 0;
 }
 
 .item-card {
   flex: 1;
   padding: 12px;
-  border-radius: 8px;
-  background: #f5f7fa;
-  border-left: 4px solid #dcdfe6;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  border-left: 4px solid var(--color-border);
 
   &.completed {
-    border-left-color: #67c23a;
-    background: #f0f9eb;
+    border-left-color: var(--color-success);
+    background: rgba(var(--color-success-rgb), 0.06);
   }
-
   &.today {
-    border-left-color: #409eff;
-    background: #ecf5ff;
+    border-left-color: var(--color-primary);
+    background: rgba(var(--color-primary-rgb), 0.06);
   }
-
   &.overdue {
-    border-left-color: #f56c6c;
-    background: #fef0f0;
+    border-left-color: var(--color-danger);
+    background: rgba(var(--color-danger-rgb), 0.04);
   }
 }
 
 .card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
+  display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
 }
 
-.round-name {
-  font-weight: 600;
-  color: #303133;
-}
+.round-name { font-weight: 600; color: var(--color-text-primary); }
 
-.interval {
-  font-size: 12px;
-  color: #909399;
-}
+.interval { font-size: 12px; color: var(--color-text-muted); }
 
 .card-status {
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 4px;
+  font-size: 14px; font-weight: 500; margin-bottom: 4px;
 
-  &.completed {
-    color: #67c23a;
-  }
-
-  &.today {
-    color: #409eff;
-  }
-
-  &.pending {
-    color: #909399;
-  }
-
-  &.overdue {
-    color: #f56c6c;
-  }
+  &.completed { color: var(--color-success); }
+  &.today { color: var(--color-primary); }
+  &.pending { color: var(--color-text-muted); }
+  &.overdue { color: var(--color-danger); }
 }
 
-.card-date {
-  font-size: 12px;
-  color: #606266;
-}
+.card-date { font-size: 12px; color: var(--color-text-secondary); }
 
 .postponed-info {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed #dcdfe6;
-  font-size: 11px;
-  color: #e6a23c;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+  font-size: 11px; color: var(--color-warning);
 
-  .original-date {
-    color: #909399;
-    margin-left: 4px;
-  }
+  .original-date { color: var(--color-text-muted); margin-left: 4px; }
 }
 
-// 延期提示
-.postponed-notice {
-  margin-top: 16px;
-}
+.postponed-notice { margin-top: 16px; }
 </style>

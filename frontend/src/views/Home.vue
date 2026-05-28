@@ -1,77 +1,54 @@
 <template>
-  <div class="home-container" :class="[deviceType, orientation]">
+  <div class="home" :class="[deviceType, orientation]">
     <el-container>
-      <!-- 桌面端侧边栏 -->
-      <el-aside v-if="isDesktop" width="200px" class="desktop-sidebar">
-        <div class="logo">背单词系统</div>
-        <el-menu
-          :default-active="activeMenu"
-          class="el-menu-vertical"
-          router
-          @select="handleMenuSelect"
-        >
-          <el-menu-item index="/dashboard">
-            <el-icon><HomeFilled /></el-icon>
-            <span>首页</span>
-          </el-menu-item>
-          <el-menu-item index="/banks">
-            <el-icon><Collection /></el-icon>
-            <span>词库管理</span>
-          </el-menu-item>
-          <el-menu-item index="/groups">
-            <el-icon><FolderOpened /></el-icon>
-            <span>学习组</span>
-          </el-menu-item>
-          <el-menu-item index="/review">
-            <el-icon><Calendar /></el-icon>
-            <span>复习计划</span>
-          </el-menu-item>
-          <el-menu-item index="/backup">
-            <el-icon><Download /></el-icon>
-            <span>数据备份</span>
-          </el-menu-item>
-          <el-menu-item index="/audio">
-            <el-icon><Headset /></el-icon>
-            <span>音频管理</span>
-          </el-menu-item>
+      <el-aside v-if="isDesktop" width="220px" class="sidebar">
+        <div class="sb-logo">
+          <span class="sb-brand">WordMaster</span>
+        </div>
+
+        <el-menu :default-active="activeMenu" class="sb-menu" router @select="handleMenuSelect">
+          <el-menu-item index="/dashboard"><el-icon><HomeFilled /></el-icon><span>首页概览</span></el-menu-item>
+          <el-menu-item index="/banks"><el-icon><Collection /></el-icon><span>词库管理</span></el-menu-item>
+          <el-menu-item index="/groups"><el-icon><FolderOpened /></el-icon><span>学习组</span></el-menu-item>
+          <el-menu-item index="/review"><el-icon><Calendar /></el-icon><span>复习计划</span></el-menu-item>
+          <el-menu-item index="/backup"><el-icon><Download /></el-icon><span>数据备份</span></el-menu-item>
+          <el-menu-item index="/audio"><el-icon><Headset /></el-icon><span>音频管理</span></el-menu-item>
+          <el-menu-item index="/settings"><el-icon><Setting /></el-icon><span>AI 设置</span></el-menu-item>
         </el-menu>
+
+        <div class="sb-footer">
+          <el-avatar :size="32" :icon="UserFilled" class="sb-avatar" />
+          <div class="sb-user">
+            <span class="sb-name">{{ username }}</span>
+            <button class="sb-logout" @click="handleLogout">退出</button>
+          </div>
+        </div>
       </el-aside>
-      
+
       <el-container>
-        <!-- 顶部导航栏 -->
-        <el-header :class="['app-header', { 'mobile-header': !isDesktop }]">
-          <div class="header-left">
-            <template v-if="isDesktop">
-              <el-breadcrumb separator="/">
-                <el-breadcrumb-item :to="{ path: '/dashboard' }">首页</el-breadcrumb-item>
-                <el-breadcrumb-item v-if="currentRoute.meta?.title">{{ currentRoute.meta.title }}</el-breadcrumb-item>
-              </el-breadcrumb>
-            </template>
-            <template v-else>
-              <span class="mobile-title">{{ currentRoute.meta?.title || '背单词系统' }}</span>
-            </template>
-          </div>
-          <div class="header-right">
-            <template v-if="isDesktop">
-              <span>欢迎, {{ username }}</span>
-              <el-button type="danger" size="small" @click="handleLogout">退出</el-button>
-            </template>
-            <template v-else>
-              <el-dropdown trigger="click" @command="handleCommand">
-                <el-avatar :size="32" :icon="UserFilled" class="user-avatar" />
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item disabled>{{ username }}</el-dropdown-item>
-                    <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </template>
-          </div>
+        <el-header :class="['topbar', { 'topbar-mobile': !isDesktop }]">
+          <template v-if="isDesktop">
+            <el-breadcrumb separator="/" class="breadcrumb">
+              <el-breadcrumb-item :to="{ path: '/dashboard' }">首页</el-breadcrumb-item>
+              <el-breadcrumb-item v-if="currentRoute.meta?.title">{{ currentRoute.meta.title }}</el-breadcrumb-item>
+            </el-breadcrumb>
+            <button class="tb-logout" @click="handleLogout">退出</button>
+          </template>
+          <template v-else>
+            <span class="tb-title">{{ currentRoute.meta?.title || 'WordMaster' }}</span>
+            <el-dropdown trigger="click" @command="handleCommand">
+              <el-avatar :size="28" :icon="UserFilled" class="tb-avatar" />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item disabled>{{ username }}</el-dropdown-item>
+                  <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
         </el-header>
-        
-        <!-- 主内容区 -->
-        <el-main :class="['app-main', { 'mobile-main': !isDesktop }]">
+
+        <el-main :class="['main', { 'main-mobile': !isDesktop }]">
           <router-view v-slot="{ Component }">
             <transition name="fade" mode="out-in">
               <component :is="Component" />
@@ -89,56 +66,39 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authAPI } from '../api'
 import { useResponsive } from '../composables/useResponsive'
-import { HomeFilled, Collection, FolderOpened, Calendar, Download, UserFilled, Headset } from '@element-plus/icons-vue'
+import { HomeFilled, Collection, FolderOpened, Calendar, Download, UserFilled, Headset, Setting } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
 const { isDesktop, deviceType, orientation } = useResponsive()
 const username = ref('')
-const activeMenu = ref('/home')
+const activeMenu = ref('/dashboard')
 
 const currentRoute = computed(() => route)
+
+const updateActiveMenu = () => {
+  const path = route.path
+  if (path.startsWith('/banks')) activeMenu.value = '/banks'
+  else if (path.startsWith('/settings')) activeMenu.value = '/settings'
+  else if (path.startsWith('/groups')) activeMenu.value = '/groups'
+  else if (path.startsWith('/review') || path.startsWith('/study-review')) activeMenu.value = '/review'
+  else if (path.startsWith('/backup')) activeMenu.value = '/backup'
+  else if (path.startsWith('/study')) activeMenu.value = '/groups'
+  else activeMenu.value = '/dashboard'
+}
 
 onMounted(async () => {
   try {
     const { data } = await authAPI.me()
     username.value = data.username
-  } catch (error) {
-    console.error('获取用户信息失败:', error)
-  }
+  } catch { /* ignore */ }
   updateActiveMenu()
 })
 
-watch(() => route.path, () => {
-  updateActiveMenu()
-})
+watch(() => route.path, updateActiveMenu)
 
-const updateActiveMenu = () => {
-  const path = route.path
-  if (path.startsWith('/banks')) {
-    activeMenu.value = '/banks'
-  } else if (path.startsWith('/groups')) {
-    activeMenu.value = '/groups'
-  } else if (path.startsWith('/review') || path.startsWith('/study-review')) {
-    activeMenu.value = '/review'
-  } else if (path.startsWith('/backup')) {
-    activeMenu.value = '/backup'
-  } else if (path.startsWith('/study')) {
-    activeMenu.value = '/groups'
-  } else {
-    activeMenu.value = '/dashboard'
-  }
-}
-
-const handleMenuSelect = (index: string) => {
-  router.push(index)
-}
-
-const handleCommand = (command: string) => {
-  if (command === 'logout') {
-    handleLogout()
-  }
-}
+const handleMenuSelect = (index: string) => router.push(index)
+const handleCommand = (cmd: string) => { if (cmd === 'logout') handleLogout() }
 
 const handleLogout = () => {
   localStorage.removeItem('token')
@@ -148,118 +108,73 @@ const handleLogout = () => {
 </script>
 
 <style scoped lang="scss">
-.home-container {
-  height: 100vh;
-  
-  &.mobile, &.tablet {
-    .el-container {
-      background: #f5f7fa;
-    }
-  }
+.home { height: 100vh; }
+
+// sidebar
+.sidebar {
+  background: #1a1f23;
+  display: flex; flex-direction: column;
 }
 
-.el-container {
-  height: 100%;
-}
-
-// 桌面端侧边栏
-.desktop-sidebar {
-  background-color: #304156;
-  
-  .logo {
-    height: 60px;
-    line-height: 60px;
-    text-align: center;
-    color: #fff;
-    font-size: 20px;
-    font-weight: bold;
-    border-bottom: 1px solid #1f2d3d;
-  }
-  
-  .el-menu-vertical {
-    border-right: none;
-    background-color: #304156;
-  }
-  
-  .el-menu-item {
-    color: #bfcbd9;
-    
-    &:hover,
-    &.is-active {
-      background-color: #263445 !important;
-      color: #409eff !important;
-    }
-  }
-}
-
-// 顶部导航栏
-.app-header {
-  background-color: #fff;
-  box-shadow: 0 1px 4px rgba(0,21,41,.08);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  
-  &.mobile-header {
-    padding: 0 16px;
-    height: 44px;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    
-    .mobile-title {
-      font-size: 17px;
-      font-weight: 600;
-      color: #333;
-    }
-    
-    .user-avatar {
-      cursor: pointer;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-  }
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
-// 主内容区
-.app-main {
-  background-color: #f0f2f5;
+.sb-logo {
   padding: 20px;
-  
-  &.mobile-main {
-    padding: 12px;
-    padding-bottom: 68px; // 为底部导航栏预留空间
-    background: #f5f7fa;
-    min-height: calc(100vh - 44px);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.sb-brand {
+  font-size: 1.125rem; font-weight: 700; color: #fff;
+}
+
+.sb-menu {
+  flex: 1;
+  background: transparent;
+  border-right: none;
+  padding: 12px 8px;
+  :deep(.el-menu-item) {
+    height: 44px; line-height: 44px; margin-bottom: 2px; border-radius: 6px;
+    color: rgba(255,255,255,0.55); font-size: 0.875rem;
+    &:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.8); }
+    &.is-active { background: rgba(255,255,255,0.08); color: #fff; font-weight: 500; }
   }
 }
 
-// 横屏优化
-@media (orientation: landscape) and (max-width: 1024px) {
-  .app-main.mobile-main {
-    padding-bottom: 60px; // 横屏时底部导航栏较矮
+.sb-footer {
+  padding: 16px; border-top: 1px solid rgba(255,255,255,0.06);
+  display: flex; align-items: center; gap: 10px;
+}
+.sb-avatar { background: #555; color: #fff; }
+.sb-user { display: flex; flex-direction: column; min-width: 0; }
+.sb-name { color: #fff; font-size: 0.8125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-logout { background: none; border: none; color: rgba(255,255,255,0.35); font-size: 0.6875rem; cursor: pointer; padding: 0; text-align: left; &:hover { color: rgba(255,255,255,0.6); } }
+
+// topbar
+.topbar {
+  background: var(--color-bg-paper);
+  border-bottom: 1px solid var(--color-border-light);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; height: 56px;
+
+  &.topbar-mobile {
+    padding: 0 16px; height: 48px;
+    .tb-title { font-size: 1rem; font-weight: 600; color: var(--color-text-primary); }
+    .tb-avatar { cursor: pointer; background: var(--color-text-muted); color: #fff; }
   }
 }
 
-// 页面切换动画
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
+.breadcrumb { font-size: 0.8125rem; }
+
+.tb-logout {
+  background: none; border: none; color: var(--color-text-muted); font-size: 0.8125rem; cursor: pointer;
+  &:hover { color: var(--color-danger); }
 }
 
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
+// main
+.main {
+  background: var(--color-bg-base);
+  padding: 16px;
+  min-height: calc(100vh - 56px);
+  &.main-mobile { padding: 12px; padding-bottom: 80px; min-height: calc(100vh - 48px); }
 }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

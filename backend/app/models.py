@@ -1,11 +1,13 @@
+import os
+import time
+from datetime import datetime
+
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Date, Text
-from datetime import datetime
-import time
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./wordmaster.db"
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./wordmaster.db")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
@@ -49,6 +51,18 @@ class Word(Base):
     phonetic = Column(String)
     meaning = Column(String, nullable=False)
 
+    # AI 增强字段 (后台预处理填充)
+    example_l1 = Column(String)          # 简单例句(含 ____ 填空)
+    example_l2 = Column(String)          # 完整例句
+    example_l3 = Column(String)          # 高级例句
+    image_prompt = Column(String)        # MiniMax 生图 prompt
+    image_url = Column(String)           # 本地图片缓存路径
+    mnemonic = Column(String)            # 中文记忆锚点
+    etymology = Column(String)           # 词根词源拆解
+    word_family = Column(String)         # 词族 JSON: ["inspector","inspection"]
+    synonyms = Column(String)            # 近义词 JSON
+    enriched = Column(Boolean, default=False)  # 是否已完成 AI 增强
+
 
 class StudyGroup(Base):
     __tablename__ = "study_groups"
@@ -88,6 +102,32 @@ class ReviewPlan(Base):
     status = Column(String, default="pending")  # pending, completed
     postponed_days = Column(Integer, default=0)  # 延期天数
     completed_at = Column(DateTime, nullable=True)
+
+
+class ApiConfig(Base):
+    """用户 AI API 配置"""
+    __tablename__ = "api_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String, nullable=False)       # "deepseek" | "minimax"
+    api_key_encrypted = Column(String, nullable=False)
+    api_base = Column(String, nullable=False)
+    text_model = Column(String)
+    image_model = Column(String)
+    speech_model = Column(String)
+    is_enabled = Column(Boolean, default=False)
+
+
+class WordErrorPattern(Base):
+    """AI 分类的拼写错误模式"""
+    __tablename__ = "word_error_patterns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    word_id = Column(Integer, ForeignKey("words.id"), nullable=False)
+    user_input = Column(String)
+    error_type = Column(String)
+    count = Column(Integer, default=1)
 
 
 Base.metadata.create_all(bind=engine)

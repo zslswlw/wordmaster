@@ -1,64 +1,26 @@
 <template>
-  <div class="login-container">
+  <div class="login-page">
     <div class="login-box">
-      <div class="login-header">
-        <div class="logo-icon">
-          <el-icon :size="48" color="#667eea"><Collection /></el-icon>
-        </div>
-        <h1>背单词系统</h1>
-        <p>高效记忆，轻松学习</p>
+      <div class="brand">
+        <h1>WordMaster</h1>
+        <p>背单词系统</p>
       </div>
-      
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        label-position="top"
-        class="login-form"
-      >
+
+      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="login-form">
         <el-form-item label="用户名" prop="username">
-          <el-input
-            v-model="form.username"
-            placeholder="请输入用户名"
-            size="large"
-          >
-            <template #prefix>
-              <el-icon><User /></el-icon>
-            </template>
-          </el-input>
+          <el-input v-model="form.username" placeholder="请输入用户名" size="large" class="t-input" />
         </el-form-item>
-        
         <el-form-item label="密码" prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            placeholder="请输入密码"
-            size="large"
-            show-password
-          >
-            <template #prefix>
-              <el-icon><Lock /></el-icon>
-            </template>
-          </el-input>
+          <el-input v-model="form.password" type="password" placeholder="请输入密码" size="large" show-password class="t-input" />
         </el-form-item>
-        
         <el-form-item>
-          <el-button
-            type="primary"
-            size="large"
-            :loading="loading"
-            @click.prevent="handleLogin"
-            class="login-btn"
-          >
-            登 录
+          <el-button type="primary" size="large" :loading="loading" @click.prevent="handleLogin" class="submit-btn">
+            登录
           </el-button>
         </el-form-item>
-        
-        <div class="login-footer">
+        <div class="footer">
           <span>还没有账号？</span>
-          <el-button link type="primary" @click="goToRegister">
-            立即注册
-          </el-button>
+          <el-button link type="primary" @click="goToRegister">立即注册</el-button>
         </div>
       </el-form>
     </div>
@@ -70,16 +32,12 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authAPI } from '../api'
-import { User, Lock, Collection } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const formRef = ref()
 const loading = ref(false)
 
-const form = reactive({
-  username: '',
-  password: ''
-})
+const form = reactive({ username: '', password: '' })
 
 const rules = {
   username: [
@@ -94,218 +52,70 @@ const rules = {
 
 const handleLogin = async () => {
   if (!formRef.value) return
-  
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
-  
   loading.value = true
   try {
-    const { data } = await authAPI.login({
-      username: form.username,
-      password: form.password
-    })
+    const { data } = await authAPI.login({ username: form.username, password: form.password })
     localStorage.setItem('token', data.access_token)
     ElMessage.success('登录成功')
     router.push('/')
   } catch (error: any) {
-    let errorMsg = '登录失败，请稍后重试'
-    if (error.response) {
-      if (error.response.status === 401) {
-        errorMsg = error.response.data?.detail || '用户名或密码错误'
-      } else if (error.response.status === 404) {
-        errorMsg = '登录服务不可用，请检查网络连接'
-      } else if (error.response.status === 500) {
-        errorMsg = '服务器内部错误，请稍后重试'
-      } else {
-        errorMsg = error.response.data?.detail || `请求失败 (${error.response.status})`
-      }
-    } else if (error.request) {
-      errorMsg = '无法连接到服务器，请检查网络连接'
-    } else {
-      errorMsg = error.message || '登录失败'
-    }
-    
-    ElMessage.error(errorMsg)
-  } finally {
-    loading.value = false
-  }
+    const msg = error.response?.data?.detail || '登录失败'
+    ElMessage.error(msg)
+  } finally { loading.value = false }
 }
 
-const goToRegister = () => {
-  router.push('/register')
-}
+const goToRegister = () => router.push('/register')
 </script>
 
 <style scoped lang="scss">
-.login-container {
+.login-page {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 20px;
+  background: var(--color-bg-base);
+  padding: 24px;
 }
 
 .login-box {
   width: 100%;
-  max-width: 420px;
-  background: #fff;
-  border-radius: 16px;
-  padding: 40px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  max-width: 380px;
 }
 
-.login-header {
+.brand {
   text-align: center;
-  margin-bottom: 32px;
-  
-  .logo-icon {
-    width: 80px;
-    height: 80px;
-    background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
-    border-radius: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 auto 16px;
-  }
-  
-  h1 {
-    margin: 0 0 8px 0;
-    font-size: 28px;
-    color: #303133;
-    font-weight: 600;
-  }
-  
-  p {
-    margin: 0;
-    color: #909399;
-    font-size: 14px;
-  }
+  margin-bottom: 40px;
+  h1 { font-size: 1.75rem; font-weight: 700; color: var(--color-text-primary); margin: 0; }
+  p { font-size: 0.9375rem; color: var(--color-text-muted); margin: 4px 0 0; }
 }
 
 .login-form {
-  :deep(.el-form-item__label) {
-    font-weight: 500;
-    color: #606266;
-  }
-  
-  :deep(.el-input__inner) {
-    font-size: 16px; // 防止 iOS 缩放
-  }
+  :deep(.el-form-item__label) { font-weight: 500; color: var(--color-text-secondary); padding-bottom: 6px; }
+  :deep(.el-form-item) { margin-bottom: 20px; }
+  :deep(.el-input__wrapper) { border-radius: 8px; height: 48px; }
 }
 
-.login-btn {
+.submit-btn {
   width: 100%;
-  margin-top: 8px;
-  height: 44px;
-  font-size: 16px;
-  border-radius: 22px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  height: 48px;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 8px;
+  background: var(--color-primary);
   border: none;
-  
-  &:hover {
-    opacity: 0.9;
-  }
+  &:hover { background: var(--color-primary-hover); }
 }
 
-.login-footer {
+.footer {
   text-align: center;
   margin-top: 24px;
-  color: #606266;
-  font-size: 14px;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
 }
 
-// 移动端适配
-@media (max-width: 768px) {
-  .login-container {
-    padding: 16px;
-    align-items: flex-start;
-    padding-top: 60px;
-  }
-  
-  .login-box {
-    padding: 32px 24px;
-    border-radius: 12px;
-  }
-  
-  .login-header {
-    margin-bottom: 24px;
-    
-    .logo-icon {
-      width: 64px;
-      height: 64px;
-      border-radius: 16px;
-    }
-    
-    h1 {
-      font-size: 24px;
-    }
-  }
-  
-  .login-btn {
-    height: 48px;
-    font-size: 17px;
-  }
-}
-
-// 手机横屏适配
-@media (max-width: 768px) and (orientation: landscape) {
-  .login-container {
-    padding-top: 20px;
-    align-items: center;
-  }
-  
-  .login-box {
-    max-width: 400px;
-    padding: 24px;
-  }
-  
-  .login-header {
-    margin-bottom: 16px;
-    
-    .logo-icon {
-      width: 48px;
-      height: 48px;
-      margin-bottom: 8px;
-    }
-    
-    h1 {
-      font-size: 20px;
-    }
-    
-    p {
-      font-size: 12px;
-    }
-  }
-  
-  :deep(.el-form-item) {
-    margin-bottom: 12px;
-  }
-  
-  :deep(.el-form-item__label) {
-    font-size: 13px;
-    line-height: 28px;
-  }
-  
-  .login-btn {
-    height: 40px;
-    margin-top: 4px;
-  }
-  
-  .login-footer {
-    margin-top: 16px;
-  }
-}
-
-// 小屏手机适配
-@media (max-width: 375px) {
-  .login-box {
-    padding: 24px 20px;
-  }
-  
-  .login-header h1 {
-    font-size: 22px;
-  }
+@media (max-width: 480px) {
+  .login-page { padding: 16px; align-items: flex-start; padding-top: 80px; }
 }
 </style>

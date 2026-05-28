@@ -61,7 +61,7 @@ export const groupAPI = {
   getAll: () => api.get('/groups'),
   getById: (id: number) => api.get(`/groups/${id}`),
   getReviewProgress: (id: number) => api.get(`/groups/${id}/review-progress`),
-  create: (data: { name: string; bank_id: number; start_seq: number; end_seq: number }) => api.post('/groups', data),
+  create: (data: { bank_id: number; start_seq: number; end_seq: number }) => api.post('/groups', data),
   update: (id: number, data: { name: string }) => api.put(`/groups/${id}`, data),
   delete: (id: number) => api.delete(`/groups/${id}`)
 }
@@ -111,4 +111,24 @@ export const backupAPI = {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
   }
+}
+
+export const settingsAPI = {
+  getConfigs: () => api.get('/settings/ai-configs'),
+  saveConfig: (data: any) => api.post('/settings/ai-configs', data),
+  updateConfig: (id: number, data: any) => api.put(`/settings/ai-configs/${id}`, data),
+  deleteConfig: (id: number) => api.delete(`/settings/ai-configs/${id}`),
+  testConnection: (data: any) => api.post('/settings/ai-configs/test', data),
+}
+
+export const aiAPI = {
+  enrichBank: (bankId: number) => api.post(`/ai/enrich-bank/${bankId}`),
+  enrichBankStatus: (bankId: number) => api.get(`/ai/enrich-bank/${bankId}/status`),
+  enrichStatus: (taskId: string) => api.get(`/ai/enrich-status/${taskId}`),
+  generateBankImages: (bankId: number) => api.post(`/ai/generate-bank-images/${bankId}`),
+  enrichWord: (wordId: number) => api.post(`/ai/enrich-word/${wordId}`),
+  generateImage: (wordId: number) => api.post(`/ai/generate-image/${wordId}`),
+  analyzeErrors: (errors: Array<{ word: string; correct: string; user: string; meaning?: string }>) => api.post('/ai/analyze-errors', { errors }),
+  generateStory: (words: string[]) => api.post('/ai/story', { words }),
+  distinguish: (word1: string, word2: string, meaning1?: string, meaning2?: string) => api.post('/ai/distinguish', { word1, meaning1: meaning1 || '', word2, meaning2: meaning2 || '' }),
 }
