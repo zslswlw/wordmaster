@@ -11,7 +11,7 @@ docker compose down
 docker compose up -d --build
 ```
 
-访问 `http://服务器IP:8000`。
+访问 `http://服务器IP`（compose.yaml 已映射 80:8000，无需加端口号）。
 
 ### 验证
 

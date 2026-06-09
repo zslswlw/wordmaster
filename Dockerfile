@@ -19,13 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ .
 
-# 启动脚本（自动运行数据库迁移）
 RUN chmod +x /app/entrypoint.sh
 
-# 前端构建产物
 COPY --from=frontend-build /frontend/dist /app/static
 
-# 数据 & 图片持久化目录
 RUN mkdir -p /app/data /app/ai_images
 ENV DATABASE_URL=sqlite:////app/data/wordmaster.db
 
