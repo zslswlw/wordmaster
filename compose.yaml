@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: wordmaster
     ports:
-      - "8000:8000"
+      - "80:8000"
     environment:
       - ENV=production
       - DATABASE_URL=sqlite:////app/data/wordmaster.db
