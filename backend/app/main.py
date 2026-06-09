@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -47,10 +48,20 @@ AI_IMAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "ai_images")
 os.makedirs(AI_IMAGES_DIR, exist_ok=True)
 app.mount("/ai-images", StaticFiles(directory=AI_IMAGES_DIR), name="ai_images")
 
-# 生产环境: 托管前端静态文件
+# 前端静态文件（JS/CSS/图片/音频等）
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 if os.path.isdir(FRONTEND_DIR):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIR, "assets")), name="assets")
+    app.mount("/audio", StaticFiles(directory=os.path.join(FRONTEND_DIR, "audio")), name="audio")
+
+    # SPA fallback: 非 API 路径返回 index.html，由 vue-router 处理前端路由
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        file_path = os.path.join(FRONTEND_DIR, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        index = os.path.join(FRONTEND_DIR, "index.html")
+        return FileResponse(index) if os.path.isfile(index) else {"detail": "Not Found"}
 else:
     @app.get("/")
     def root():
