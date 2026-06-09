@@ -23,6 +23,7 @@ AI_COLUMNS = [
     ("etymology", "VARCHAR", "''"),
     ("word_family", "VARCHAR", "''"),
     ("synonyms", "VARCHAR", "''"),
+    ("context_audio", "VARCHAR", "''"),
     ("enriched", "BOOLEAN", "0"),
 ]
 
@@ -37,6 +38,16 @@ NEW_TABLES = {
             image_model VARCHAR,
             speech_model VARCHAR,
             is_enabled BOOLEAN DEFAULT 0
+        )
+    """,
+    "feature_flags": """
+        CREATE TABLE IF NOT EXISTS feature_flags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            example_enabled BOOLEAN DEFAULT 1,
+            image_enabled BOOLEAN DEFAULT 1,
+            mnemonic_enabled BOOLEAN DEFAULT 1,
+            error_analysis_enabled BOOLEAN DEFAULT 1,
+            story_enabled BOOLEAN DEFAULT 0
         )
     """,
     "word_error_patterns": """
@@ -95,6 +106,39 @@ def migrate():
             print(f"  ✓ 创建表: {table_name}")
         else:
             print(f"  - 已存在: {table_name}")
+
+    # 确保 feature_flags 有默认行
+    cursor.execute("SELECT COUNT(*) FROM feature_flags")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO feature_flags (id, example_enabled, image_enabled, mnemonic_enabled, error_analysis_enabled, story_enabled) VALUES (1, 1, 1, 1, 1, 0)")
+        print("  ✓ 插入默认 feature_flags 行")
+
+    # 词库迁移: user_id 允许 NULL (共享词库)
+    if words_table_exists:
+        cursor.execute("PRAGMA table_info(word_banks)")
+        bank_cols = {row[1]: row for row in cursor.fetchall()}
+        if "user_id" in bank_cols and bank_cols["user_id"][3] == 1:  # notnull=1
+            conn.commit()  # 提交之前的操作
+            # SQLite 不支持 ALTER COLUMN，通过重建表实现
+            conn.execute("CREATE TABLE word_banks_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR NOT NULL, user_id INTEGER NULL REFERENCES users(id), word_count INTEGER DEFAULT 0, created_at DATETIME)")
+            conn.execute("INSERT INTO word_banks_new SELECT id, name, user_id, word_count, created_at FROM word_banks")
+            conn.execute("DROP TABLE word_banks")
+            conn.execute("ALTER TABLE word_banks_new RENAME TO word_banks")
+            conn.commit()
+            print("  ✓ word_banks.user_id: NOT NULL → NULL")
+
+    # 角色迁移: 添加 role 列，首个用户设为 admin
+    if words_table_exists:
+        cursor.execute("PRAGMA table_info(users)")
+        user_cols = {row[1] for row in cursor.fetchall()}
+        if "role" not in user_cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN role VARCHAR DEFAULT 'user'")
+            print("  ✓ 添加列: users.role")
+            # 首注册用户设为 admin
+            cursor.execute("UPDATE users SET role = 'admin' WHERE id = (SELECT MIN(id) FROM users)")
+            print("  ✓ 首个用户已设为 admin")
+        else:
+            print("  - 已存在: users.role")
 
     conn.commit()
     conn.close()

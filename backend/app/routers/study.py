@@ -197,6 +197,7 @@ def get_word(
         "synonyms": word.synonyms,
         "image_url": _web_image_url(word.image_url),
         "image_prompt": word.image_prompt,
+        "context_audio": word.context_audio,
         "enriched": word.enriched,
     }
 

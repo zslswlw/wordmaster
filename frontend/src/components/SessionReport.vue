@@ -55,7 +55,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { aiAPI } from '../api'
+import { aiAPI, settingsAPI } from '../api'
 import { DataAnalysis, Loading, MagicStick } from '@element-plus/icons-vue'
 
 const props = defineProps<{
@@ -75,8 +75,13 @@ const renderedAnalysis = computed(() => {
   return analysis.value.replace(/\n/g, '<br>')
 })
 
-onMounted(() => {
-  if (props.errors.length > 0) {
+onMounted(async () => {
+  if (props.errors.length === 0) return
+  try {
+    const { data } = await settingsAPI.getFeatureFlags()
+    if (data.error_analysis_enabled) runAnalysis()
+    if (data.story_enabled && props.errors.length >= 3) runStory()
+  } catch {
     runAnalysis()
     if (props.errors.length >= 3) runStory()
   }
@@ -88,7 +93,14 @@ const runAnalysis = async () => {
   analysisFailed.value = false
   try {
     const { data } = await aiAPI.analyzeErrors(props.errors)
-    analysis.value = data.summary || (typeof data.patterns === 'string' ? data.patterns : JSON.stringify(data.patterns || data))
+    // summary 优先；如果为空或缺失，从 patterns 构建可读文本
+    if (data.summary) {
+      analysis.value = data.summary
+    } else if (Array.isArray(data.patterns) && data.patterns.length > 0) {
+      analysis.value = data.patterns.map((p: any) => `【${p.name}】${p.explanation || ''}`).join('\n\n')
+    } else {
+      analysis.value = '未发现明显拼写模式，继续加油！'
+    }
   } catch {
     analysisFailed.value = true
   } finally {
@@ -102,7 +114,8 @@ const runStory = async () => {
   try {
     const words = props.errors.map(e => e.correct)
     const { data } = await aiAPI.generateStory(words)
-    story.value = data.story
+    story.value = data.story || ''
+    if (!data.story) storyFailed.value = true
   } catch {
     storyFailed.value = true
   } finally {

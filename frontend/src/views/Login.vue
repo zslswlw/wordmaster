@@ -32,6 +32,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authAPI } from '../api'
+import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
 const formRef = ref()
@@ -50,6 +51,8 @@ const rules = {
   ]
 }
 
+const { setRole } = useAuth()
+
 const handleLogin = async () => {
   if (!formRef.value) return
   const valid = await formRef.value.validate().catch(() => false)
@@ -58,6 +61,8 @@ const handleLogin = async () => {
   try {
     const { data } = await authAPI.login({ username: form.username, password: form.password })
     localStorage.setItem('token', data.access_token)
+    const me = await authAPI.me()
+    setRole(me.data.role)
     ElMessage.success('登录成功')
     router.push('/')
   } catch (error: any) {

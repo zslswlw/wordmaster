@@ -4,6 +4,19 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+class RateLimitError(Exception):
+    """Provider 触发了速率限制 / 时间窗口用尽.
+    包含 retry_after 字段 (秒), None 表示由调用方自行退避.
+    """
+    def __init__(self, message: str, retry_after: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class ProviderError(Exception):
+    """Provider 通用错误 (非速率限制类)."""
+
+
 @dataclass
 class ProviderConfig:
     api_key: str
@@ -26,13 +39,43 @@ class BaseProvider(ABC):
     async def chat_json(self, messages: list[dict], **kwargs) -> dict:
         """文本对话并解析 JSON 返回"""
         import json
+        import re
         text = await self.chat(messages, **kwargs)
-        # 尝试提取 JSON 块
         text = text.strip()
+
+        # 提取 markdown 代码块
         if text.startswith("```"):
             lines = text.split("\n")
             text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        return json.loads(text)
+
+        # 尝试提取 {...} 块 (处理模型在 JSON 前后附加文字的情况)
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            text = m.group(0)
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # 尝试修复截断的 JSON: 补全缺失的闭合
+            fixed = text.rstrip()
+            # 移除尾部不完整的键/值
+            while fixed and fixed[-1] not in "}]\"":
+                fixed = fixed[:-1]
+            # 补全可能缺失的引号和括号
+            open_braces = fixed.count("{") - fixed.count("}")
+            open_brackets = fixed.count("[") - fixed.count("]")
+            in_string = (fixed.count('"') % 2) != 0
+            if in_string:
+                fixed += '"'
+            fixed += "]" * open_brackets
+            fixed += "}" * open_braces
+            try:
+                return json.loads(fixed)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(
+                    f"JSON decode failed after repair. Original error: {e}. "
+                    f"Raw text (last 200 chars): ...{text[-200:]}"
+                )
 
     async def generate_image(self, prompt: str, **kwargs) -> bytes:
         """图像生成, 返回图片二进制数据。不支持则 raise NotImplementedError"""

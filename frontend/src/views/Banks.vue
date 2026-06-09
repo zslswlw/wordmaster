@@ -2,14 +2,14 @@
   <div class="page">
     <div class="page-top">
       <h2>词库管理</h2>
-      <el-button type="primary" size="small" @click="showImportDialog = true">
+      <el-button v-if="isAdmin" type="primary" size="small" @click="showImportDialog = true">
         <el-icon><Plus /></el-icon> 导入词库
       </el-button>
     </div>
 
     <div v-if="banks.length === 0" class="empty">
       <p>暂无词库</p>
-      <el-button type="primary" @click="showImportDialog = true">导入词库</el-button>
+      <el-button v-if="isAdmin" type="primary" @click="showImportDialog = true">导入词库</el-button>
     </div>
 
     <div v-else class="banks">
@@ -18,7 +18,7 @@
           <span class="bank-name">{{ bank.name }}</span>
           <span class="bank-meta">{{ bank.word_count }} 词 &middot; {{ formatDate(bank.created_at) }}</span>
         </div>
-        <el-button type="danger" size="small" text @click="handleDelete(bank)" :loading="bank.deleting">
+        <el-button v-if="isAdmin" type="danger" size="small" text @click="handleDelete(bank)" :loading="bank.deleting">
           <el-icon><Delete /></el-icon>
         </el-button>
       </div>
@@ -47,10 +47,12 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { bankAPI } from '../api'
+import { useAuth } from '../composables/useAuth'
 import { Plus, Delete } from '@element-plus/icons-vue'
 
 interface Bank { id: number; name: string; word_count: number; created_at: string; deleting?: boolean }
 
+const { isAdmin } = useAuth()
 const banks = ref<Bank[]>([])
 const showImportDialog = ref(false)
 const importing = ref(false)
@@ -73,7 +75,7 @@ const handleImport = async () => {
   importing.value = true
   try {
     await bankAPI.upload(importForm.file, importForm.name)
-    ElMessage.success('导入成功')
+    ElMessage.success('导入成功，AI 预处理已在后台自动启动')
     showImportDialog.value = false
     importForm.name = ''; importForm.file = null; fileList.value = []
     await loadBanks()

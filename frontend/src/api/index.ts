@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 10000
+  timeout: 60000
 })
 
 api.interceptors.request.use(
@@ -28,6 +28,7 @@ api.interceptors.response.use(
       const isLoginRequest = error.config?.url?.includes('/auth/login')
       if (!isLoginRequest) {
         localStorage.removeItem('token')
+        localStorage.removeItem('role')
         window.location.href = '/login'
       }
     }
@@ -119,6 +120,8 @@ export const settingsAPI = {
   updateConfig: (id: number, data: any) => api.put(`/settings/ai-configs/${id}`, data),
   deleteConfig: (id: number) => api.delete(`/settings/ai-configs/${id}`),
   testConnection: (data: any) => api.post('/settings/ai-configs/test', data),
+  getFeatureFlags: () => api.get('/settings/feature-flags'),
+  updateFeatureFlags: (data: any) => api.put('/settings/feature-flags', data),
 }
 
 export const aiAPI = {
@@ -126,6 +129,9 @@ export const aiAPI = {
   enrichBankStatus: (bankId: number) => api.get(`/ai/enrich-bank/${bankId}/status`),
   enrichStatus: (taskId: string) => api.get(`/ai/enrich-status/${taskId}`),
   generateBankImages: (bankId: number) => api.post(`/ai/generate-bank-images/${bankId}`),
+  generateContextAudio: (bankId: number) => api.post(`/ai/generate-context-audio/${bankId}`),
+  bankPipelineStatus: (bankId: number) => api.get(`/ai/bank-pipeline/${bankId}`),
+  reprocessBank: (bankId: number) => api.post(`/ai/reprocess-bank/${bankId}`),
   enrichWord: (wordId: number) => api.post(`/ai/enrich-word/${wordId}`),
   generateImage: (wordId: number) => api.post(`/ai/generate-image/${wordId}`),
   analyzeErrors: (errors: Array<{ word: string; correct: string; user: string; meaning?: string }>) => api.post('/ai/analyze-errors', { errors }),

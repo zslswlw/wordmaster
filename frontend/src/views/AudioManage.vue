@@ -37,11 +37,16 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Search, Refresh } from '@element-plus/icons-vue'
 import axios from 'axios'
+import { useAuth } from '../composables/useAuth'
 
 interface AudioStatus { total_words: number; has_audio: number; missing: number; coverage: string; audio_dir: string; missing_sample: string[] }
+
+const router = useRouter()
+const { isAdmin } = useAuth()
 
 const status = ref<AudioStatus>({ total_words: 0, has_audio: 0, missing: 0, coverage: '0%', audio_dir: '', missing_sample: [] })
 const syncing = ref(false)
@@ -85,7 +90,10 @@ const checkSpecificWord = async () => {
 
 const refreshStatus = () => { fetchStatus(); ElMessage.success('已刷新') }
 
-onMounted(() => fetchStatus())
+onMounted(() => {
+  if (!isAdmin.value) { router.replace('/dashboard'); return }
+  fetchStatus()
+})
 </script>
 
 <style scoped lang="scss">

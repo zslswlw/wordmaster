@@ -67,8 +67,7 @@ def create_group(
     current_user: User = Depends(get_current_user)
 ):
     bank = db.query(WordBank).filter(
-        WordBank.id == group.bank_id,
-        WordBank.user_id == current_user.id
+        WordBank.id == group.bank_id
     ).first()
     if not bank:
         raise HTTPException(status_code=404, detail="Bank not found")

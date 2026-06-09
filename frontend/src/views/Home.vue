@@ -8,12 +8,10 @@
 
         <el-menu :default-active="activeMenu" class="sb-menu" router @select="handleMenuSelect">
           <el-menu-item index="/dashboard"><el-icon><HomeFilled /></el-icon><span>首页概览</span></el-menu-item>
-          <el-menu-item index="/banks"><el-icon><Collection /></el-icon><span>词库管理</span></el-menu-item>
           <el-menu-item index="/groups"><el-icon><FolderOpened /></el-icon><span>学习组</span></el-menu-item>
           <el-menu-item index="/review"><el-icon><Calendar /></el-icon><span>复习计划</span></el-menu-item>
-          <el-menu-item index="/backup"><el-icon><Download /></el-icon><span>数据备份</span></el-menu-item>
-          <el-menu-item index="/audio"><el-icon><Headset /></el-icon><span>音频管理</span></el-menu-item>
-          <el-menu-item index="/settings"><el-icon><Setting /></el-icon><span>AI 设置</span></el-menu-item>
+          <el-menu-item v-if="isAdmin" index="/backup"><el-icon><Download /></el-icon><span>数据备份</span></el-menu-item>
+          <el-menu-item v-if="isAdmin" index="/admin"><el-icon><Setting /></el-icon><span>管理</span></el-menu-item>
         </el-menu>
 
         <div class="sb-footer">
@@ -66,11 +64,13 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authAPI } from '../api'
 import { useResponsive } from '../composables/useResponsive'
-import { HomeFilled, Collection, FolderOpened, Calendar, Download, UserFilled, Headset, Setting } from '@element-plus/icons-vue'
+import { useAuth } from '../composables/useAuth'
+import { HomeFilled, FolderOpened, Calendar, Download, UserFilled, Setting } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
 const { isDesktop, deviceType, orientation } = useResponsive()
+const { isAdmin, setRole, clearAuth } = useAuth()
 const username = ref('')
 const activeMenu = ref('/dashboard')
 
@@ -78,8 +78,7 @@ const currentRoute = computed(() => route)
 
 const updateActiveMenu = () => {
   const path = route.path
-  if (path.startsWith('/banks')) activeMenu.value = '/banks'
-  else if (path.startsWith('/settings')) activeMenu.value = '/settings'
+  if (path.startsWith('/admin')) activeMenu.value = '/admin'
   else if (path.startsWith('/groups')) activeMenu.value = '/groups'
   else if (path.startsWith('/review') || path.startsWith('/study-review')) activeMenu.value = '/review'
   else if (path.startsWith('/backup')) activeMenu.value = '/backup'
@@ -91,6 +90,7 @@ onMounted(async () => {
   try {
     const { data } = await authAPI.me()
     username.value = data.username
+    setRole(data.role || 'user')
   } catch { /* ignore */ }
   updateActiveMenu()
 })
@@ -101,7 +101,7 @@ const handleMenuSelect = (index: string) => router.push(index)
 const handleCommand = (cmd: string) => { if (cmd === 'logout') handleLogout() }
 
 const handleLogout = () => {
-  localStorage.removeItem('token')
+  clearAuth()
   ElMessage.success('已退出登录')
   router.push('/login')
 }

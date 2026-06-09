@@ -16,27 +16,32 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useResponsive } from '../composables/useResponsive'
-import { 
-  HomeFilled, 
-  Collection, 
-  FolderOpened, 
-  Calendar, 
-  Download 
+import {
+  HomeFilled,
+  FolderOpened,
+  Calendar,
+  Download,
+  Setting
 } from '@element-plus/icons-vue'
+import { useAuth } from '../composables/useAuth'
 
 const route = useRoute()
 const router = useRouter()
 const { isMobile, isLandscape } = useResponsive()
+const { isAdmin } = useAuth()
 
-const menuItems = [
+const allMenuItems = [
   { path: '/dashboard', title: '首页', icon: HomeFilled },
-  { path: '/banks', title: '词库', icon: Collection },
   { path: '/groups', title: '学习', icon: FolderOpened },
   { path: '/review', title: '复习', icon: Calendar },
-  { path: '/backup', title: '备份', icon: Download },
+  { path: '/backup', title: '备份', icon: Download, adminOnly: true },
+  { path: '/admin', title: '管理', icon: Setting, adminOnly: true },
 ]
+
+const menuItems = computed(() => allMenuItems.filter(item => !item.adminOnly || isAdmin.value))
 
 const isActive = (path: string) => {
   if (path === '/dashboard') {
@@ -45,7 +50,7 @@ const isActive = (path: string) => {
   return route.path.startsWith(path)
 }
 
-const handleClick = (item: typeof menuItems[0]) => {
+const handleClick = (item: (typeof allMenuItems)[number]) => {
   router.push(item.path)
 }
 </script>

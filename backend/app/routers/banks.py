@@ -1,14 +1,20 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 import csv
 import io
-from datetime import datetime
 
 from ..models import get_db, User, WordBank, Word
 from ..schemas import WordBankCreate, WordBankResponse, WordResponse
-from ..auth import get_current_user
+from ..auth import get_current_user, get_admin_user
 
 router = APIRouter(prefix="/api/banks", tags=["word_banks"])
+
+
+async def _trigger_pipeline(bank_id: int):
+    """词库导入后在后台自动运行完整预处理流水线"""
+    from .ai import _run_full_pipeline
+    await _run_full_pipeline(bank_id)
 
 
 @router.get("", response_model=list[WordBankResponse])
@@ -16,7 +22,8 @@ def get_banks(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    return db.query(WordBank).filter(WordBank.user_id == current_user.id).all()
+    """所有认证用户可查看共享词库"""
+    return db.query(WordBank).all()
 
 
 @router.post("", response_model=WordBankResponse)
@@ -24,7 +31,7 @@ async def import_bank(
     file: UploadFile = File(...),
     name: str = Form(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    admin: User = Depends(get_admin_user)
 ):
     try:
         content = await file.read()
@@ -57,7 +64,7 @@ async def import_bank(
             raise HTTPException(status_code=400, detail="CSV文件中没有有效的单词数据")
         
         # 创建词库
-        bank = WordBank(name=name, user_id=current_user.id, word_count=len(words_to_add))
+        bank = WordBank(name=name, word_count=len(words_to_add), user_id=admin.id)
         db.add(bank)
         db.commit()
         db.refresh(bank)
@@ -69,7 +76,9 @@ async def import_bank(
         db.bulk_save_objects(words_to_add)
         db.commit()
         db.refresh(bank)
-        
+
+        asyncio.create_task(_trigger_pipeline(bank.id))
+
         return bank
     except HTTPException:
         raise
@@ -81,15 +90,12 @@ async def import_bank(
 def delete_bank(
     bank_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    admin: User = Depends(get_admin_user)
 ):
-    bank = db.query(WordBank).filter(
-        WordBank.id == bank_id,
-        WordBank.user_id == current_user.id
-    ).first()
+    bank = db.query(WordBank).filter(WordBank.id == bank_id).first()
     if not bank:
         raise HTTPException(status_code=404, detail="Bank not found")
-    
+
     db.query(Word).filter(Word.bank_id == bank_id).delete()
     db.delete(bank)
     db.commit()
@@ -104,10 +110,7 @@ def get_words(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    bank = db.query(WordBank).filter(
-        WordBank.id == bank_id,
-        WordBank.user_id == current_user.id
-    ).first()
+    bank = db.query(WordBank).filter(WordBank.id == bank_id).first()
     if not bank:
         raise HTTPException(status_code=404, detail="Bank not found")
     

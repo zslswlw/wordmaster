@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime
 
 from ..models import get_db, Word
-from ..auth import get_current_user
+from ..auth import get_current_user, get_admin_user
 
 router = APIRouter(prefix="/api/audio", tags=["audio"])
 
@@ -76,7 +76,7 @@ def download_audio(word: str) -> bool:
 async def sync_audio(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    admin = Depends(get_admin_user)
 ):
     """
     同步所有单词的音频（后台任务）
@@ -100,7 +100,7 @@ async def sync_audio(
 async def sync_single_word(
     word: str,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    admin = Depends(get_admin_user)
 ):
     """
     同步单个单词的音频
@@ -226,7 +226,7 @@ def download_missing_audio_task(word_list: List[str]):
 async def batch_download(
     words: List[str],
     background_tasks: BackgroundTasks,
-    current_user = Depends(get_current_user)
+    admin = Depends(get_admin_user)
 ):
     """
     批量下载指定单词的音频

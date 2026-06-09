@@ -20,11 +20,14 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
             logger.warning(f"用户名已存在: {user.username}")
             raise HTTPException(status_code=400, detail="用户名已被注册")
         hashed_password = get_password_hash(user.password)
-        new_user = User(username=user.username, password_hash=hashed_password)
+        # 首个注册用户自动设为管理员
+        existing_count = db.query(User).count()
+        role = "admin" if existing_count == 0 else "user"
+        new_user = User(username=user.username, password_hash=hashed_password, role=role)
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
-        logger.info(f"注册成功: {user.username}")
+        logger.info(f"注册成功: {user.username} (role={role})")
         return new_user
     except HTTPException:
         raise
@@ -50,7 +53,7 @@ def login(user: UserCreate, db: Session = Depends(get_db)):
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": db_user.username}, expires_delta=access_token_expires
+        data={"sub": db_user.username, "role": db_user.role}, expires_delta=access_token_expires
     )
     logger.info(f"登录成功: {user.username}")
     return {"access_token": access_token, "token_type": "bearer"}

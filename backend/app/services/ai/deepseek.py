@@ -1,6 +1,6 @@
 """DeepSeek Provider — OpenAI 兼容接口"""
 import httpx
-from .base import BaseProvider, ProviderConfig
+from .base import BaseProvider, ProviderConfig, RateLimitError
 
 
 class DeepSeekProvider(BaseProvider):
@@ -29,6 +29,23 @@ class DeepSeekProvider(BaseProvider):
                 headers=self._headers(),
                 json={"model": model, "messages": messages, **kwargs},
             )
+            # 速率限制检测
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("retry-after")
+                try:
+                    retry = float(retry_after) if retry_after else 60.0
+                except (ValueError, TypeError):
+                    retry = 60.0
+                raise RateLimitError(f"DeepSeek 429 (retry after {retry}s)", retry_after=retry)
+            h = {k.lower(): v for k, v in (resp.headers.items() if resp.headers else [])}
+            for k in ("x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens"):
+                v = h.get(k)
+                if v is not None:
+                    try:
+                        if float(v) <= 0:
+                            raise RateLimitError(f"DeepSeek {k}=0 exhausted", retry_after=60.0)
+                    except (ValueError, TypeError):
+                        pass
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]

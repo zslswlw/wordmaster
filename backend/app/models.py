@@ -28,6 +28,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
+    role = Column(String, default="user")
     created_at = Column(DateTime, default=get_local_datetime)
 
 
@@ -36,7 +37,7 @@ class WordBank(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # 共享词库，admin 管理
     word_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=get_local_datetime)
 
@@ -61,6 +62,7 @@ class Word(Base):
     etymology = Column(String)           # 词根词源拆解
     word_family = Column(String)         # 词族 JSON: ["inspector","inspection"]
     synonyms = Column(String)            # 近义词 JSON
+    context_audio = Column(String)            # AI 语境发音路径 (MiniMax TTS)
     enriched = Column(Boolean, default=False)  # 是否已完成 AI 增强
 
 
@@ -128,6 +130,18 @@ class WordErrorPattern(Base):
     user_input = Column(String)
     error_type = Column(String)
     count = Column(Integer, default=1)
+
+
+class FeatureFlags(Base):
+    """AI 功能开关 — 全局单行配置，admin 管理"""
+    __tablename__ = "feature_flags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    example_enabled = Column(Boolean, default=True)
+    image_enabled = Column(Boolean, default=True)
+    mnemonic_enabled = Column(Boolean, default=True)
+    error_analysis_enabled = Column(Boolean, default=True)
+    story_enabled = Column(Boolean, default=False)
 
 
 Base.metadata.create_all(bind=engine)

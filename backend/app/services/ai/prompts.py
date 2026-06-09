@@ -12,7 +12,7 @@ Generate the following. Return ONLY valid JSON, no other text:
   "example_l1": "A simple English sentence where the word '{word}' is replaced by ____. After the ____ add a hint in parentheses like '(starts with {first_letter}, {length} letters)'. Example: 'She ____ the beautiful sunset. (starts with a, 7 letters)'",
   "example_l2": "A natural, everyday English sentence using '{word}' correctly",
   "example_l3": "A more sophisticated English sentence using '{word}' in an interesting or nuanced way",
-  "image_prompt": "A detailed English prompt for AI image generation (≤50 words). Describe a photorealistic, cinematic scene that VISUALLY captures the essence of '{word}'. For abstract concepts, use powerful visual metaphors. Focus on mood, lighting, composition. NO text in the image.",
+  "image_prompt": "Create a vivid, memorable image prompt for AI generation (≤60 words, English). The image must serve as a VISUAL MNEMONIC for Chinese learners — when they see this image, they should immediately recall the word '{word}' (meaning: {meaning}). Design a striking, emotionally resonant scene that directly embodies the core meaning. Use: (1) a clear focal subject dramatizing the word's essence, (2) bold color contrast or unusual juxtaposition to make it unforgettable, (3) cinematic lighting and shallow depth of field. For abstract words, invent a concrete visual metaphor — e.g. 'freedom' → a bird bursting from an open cage into golden sunrise. NO text/letters in the image.",
   "mnemonic": "A creative memory anchor in Chinese. Use 谐音 (sound-alike) or vivid 场景联想 (scene association). Make it fun, sticky, and easy to remember. Max 30 Chinese characters.",
   "etymology": "Brief, interesting word origin in Chinese (词根词源). If the word has clear Latin/Greek roots, explain them. If not interesting, set to null.",
   "word_family": ["2-3 related word forms, e.g. noun/verb/adjective variants"],
@@ -59,7 +59,9 @@ Respond in Chinese. Keep it concise and actionable. Format as JSON:
     }}
   ],
   "summary": "本轮共发现X种拼写模式。重点关注..."
-}}"""
+}}
+
+CRITICAL: Return ONLY the JSON. No markdown code blocks, no explanations."""
 
 GENERATE_STORY = """Weave these English words into a coherent micro-story.
 

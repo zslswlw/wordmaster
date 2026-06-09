@@ -3,13 +3,11 @@ import Login from '../views/Login.vue'
 import Register from '../views/Register.vue'
 import Home from '../views/Home.vue'
 import Dashboard from '../views/Dashboard.vue'
-import Banks from '../views/Banks.vue'
+import Admin from '../views/Admin.vue'
 import Groups from '../views/Groups.vue'
 import Study from '../views/Study.vue'
 import Review from '../views/Review.vue'
 import Backup from '../views/Backup.vue'
-import AudioManage from '../views/AudioManage.vue'
-import Settings from '../views/Settings.vue'
 
 const routes = [
   {
@@ -25,10 +23,10 @@ const routes = [
         meta: { title: '仪表板' }
       },
       {
-        path: 'banks',
-        name: 'Banks',
-        component: Banks,
-        meta: { title: '词库管理' }
+        path: 'admin',
+        name: 'Admin',
+        component: Admin,
+        meta: { title: '管理', adminOnly: true }
       },
       {
         path: 'groups',
@@ -52,20 +50,8 @@ const routes = [
         path: 'backup',
         name: 'Backup',
         component: Backup,
-        meta: { title: '数据备份' }
+        meta: { title: '数据备份', adminOnly: true }
       },
-      {
-        path: 'audio',
-        name: 'AudioManage',
-        component: AudioManage,
-        meta: { title: '音频管理' }
-      },
-      {
-        path: 'settings',
-        name: 'Settings',
-        component: Settings,
-        meta: { title: 'AI 设置' }
-      }
     ]
   },
   {
@@ -90,19 +76,19 @@ const router = createRouter({
 // 全局路由守卫
 router.beforeEach((to, _from, next) => {
   const token = localStorage.getItem('token')
-  
-  // 如果访问公开页面（登录/注册）
+  const role = localStorage.getItem('role')
+
   if (to.meta.public) {
-    // 如果已登录，跳转到首页
     if (token) {
       next('/')
     } else {
       next()
     }
   } else {
-    // 访问需要认证的页面
     if (!token) {
       next('/login')
+    } else if (to.meta.adminOnly && role !== 'admin') {
+      next('/dashboard')
     } else {
       next()
     }

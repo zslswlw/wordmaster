@@ -1,8 +1,9 @@
-"""用户 API 配置管理"""
+"""用户 API 配置管理 — 管理员专属"""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from ..models import get_db, ApiConfig
+from ..models import get_db, ApiConfig, FeatureFlags
+from ..auth import get_admin_user, get_current_user
 from ..services.ai.base import ProviderConfig
 from ..services.ai.deepseek import DeepSeekProvider
 from ..services.ai.minimax import MiniMaxProvider
@@ -35,7 +36,7 @@ class ApiConfigResponse(BaseModel):
 
 
 @router.get("/ai-configs")
-def list_configs(db: Session = Depends(get_db)):
+def list_configs(db: Session = Depends(get_db), admin=Depends(get_admin_user)):
     configs = db.query(ApiConfig).all()
     return [{
         "id": c.id, "provider": c.provider,
@@ -47,10 +48,11 @@ def list_configs(db: Session = Depends(get_db)):
 
 
 @router.post("/ai-configs")
-def create_config(data: ApiConfigCreate, db: Session = Depends(get_db)):
+def create_config(data: ApiConfigCreate, db: Session = Depends(get_db), admin=Depends(get_admin_user)):
     existing = db.query(ApiConfig).filter(ApiConfig.provider == data.provider).first()
     if existing:
-        existing.api_key_encrypted = data.api_key
+        if data.api_key:
+            existing.api_key_encrypted = data.api_key
         existing.api_base = data.api_base
         existing.text_model = data.text_model
         existing.image_model = data.image_model
@@ -69,12 +71,14 @@ def create_config(data: ApiConfigCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/ai-configs/{config_id}")
-def update_config(config_id: int, data: ApiConfigCreate, db: Session = Depends(get_db)):
+def update_config(config_id: int, data: ApiConfigCreate, db: Session = Depends(get_db), admin=Depends(get_admin_user)):
     cfg = db.query(ApiConfig).filter(ApiConfig.id == config_id).first()
     if not cfg:
         raise HTTPException(404, "配置不存在")
     model_data = data.model_dump()
-    model_data["api_key_encrypted"] = model_data.pop("api_key")
+    api_key = model_data.pop("api_key")
+    if api_key:
+        model_data["api_key_encrypted"] = api_key
     for k, v in model_data.items():
         setattr(cfg, k, v)
     db.commit()
@@ -82,7 +86,7 @@ def update_config(config_id: int, data: ApiConfigCreate, db: Session = Depends(g
 
 
 @router.delete("/ai-configs/{config_id}")
-def delete_config(config_id: int, db: Session = Depends(get_db)):
+def delete_config(config_id: int, db: Session = Depends(get_db), admin=Depends(get_admin_user)):
     cfg = db.query(ApiConfig).filter(ApiConfig.id == config_id).first()
     if not cfg:
         raise HTTPException(404, "配置不存在")
@@ -92,10 +96,15 @@ def delete_config(config_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/ai-configs/test")
-async def test_connection(data: ApiConfigCreate):
+async def test_connection(data: ApiConfigCreate, db: Session = Depends(get_db), admin=Depends(get_admin_user)):
     """测试 API 连接"""
+    api_key = data.api_key
+    if not api_key or "****" in api_key:
+        stored = db.query(ApiConfig).filter(ApiConfig.provider == data.provider).first()
+        if stored:
+            api_key = stored.api_key_encrypted
     config = ProviderConfig(
-        api_key=data.api_key, api_base=data.api_base,
+        api_key=api_key, api_base=data.api_base,
         text_model=data.text_model, image_model=data.image_model or "",
         speech_model=data.speech_model or "",
     )
@@ -111,3 +120,43 @@ async def test_connection(data: ApiConfigCreate):
         return {"success": ok, "message": msg}
     except Exception as e:
         return {"success": False, "message": str(e)}
+
+
+class FeatureFlagsUpdate(BaseModel):
+    example_enabled: bool = True
+    image_enabled: bool = True
+    mnemonic_enabled: bool = True
+    error_analysis_enabled: bool = True
+    story_enabled: bool = False
+
+
+def _get_feature_flags(db: Session) -> FeatureFlags:
+    """获取或创建全局唯一的 feature_flags 行"""
+    ff = db.query(FeatureFlags).first()
+    if not ff:
+        ff = FeatureFlags(id=1)
+        db.add(ff)
+        db.commit()
+        db.refresh(ff)
+    return ff
+
+
+@router.get("/feature-flags")
+def get_feature_flags(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    ff = _get_feature_flags(db)
+    return {
+        "example_enabled": ff.example_enabled,
+        "image_enabled": ff.image_enabled,
+        "mnemonic_enabled": ff.mnemonic_enabled,
+        "error_analysis_enabled": ff.error_analysis_enabled,
+        "story_enabled": ff.story_enabled,
+    }
+
+
+@router.put("/feature-flags")
+def update_feature_flags(data: FeatureFlagsUpdate, db: Session = Depends(get_db), admin=Depends(get_admin_user)):
+    ff = _get_feature_flags(db)
+    for k, v in data.model_dump().items():
+        setattr(ff, k, v)
+    db.commit()
+    return {"message": "功能开关已更新"}

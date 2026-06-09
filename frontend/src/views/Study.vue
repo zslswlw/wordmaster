@@ -15,7 +15,7 @@
         <button class="phonetic-toggle" :class="{ active: showPhonetic }" @click.stop="togglePhonetic">
           <el-icon><ChatDotRound /></el-icon>
         </button>
-        <button v-if="hasVisual" class="visual-toggle" :class="{ active: visualMode }" @click.stop="toggleVisualMode" title="视觉模式：看图识词">
+        <button v-if="featureFlags.image_enabled && hasVisual" class="visual-toggle" :class="{ active: visualMode }" @click.stop="toggleVisualMode" title="视觉模式：看图识词">
           <el-icon><Picture /></el-icon>
         </button>
         <span class="round-badge" v-if="currentRound > 1">R{{ currentRound }}</span>
@@ -44,7 +44,7 @@
       </div>
 
       <div class="type-zone">
-        <p v-if="isStubborn && currentWord?.example_l1" class="stubborn-hint">{{ currentWord.example_l1 }}</p>
+        <p v-if="featureFlags.example_enabled && isStubborn && currentWord?.example_l1" class="stubborn-hint">{{ currentWord.example_l1 }}</p>
         <p v-else-if="!userInput" class="type-hint">输入单词，按 Enter 提交</p>
 
         <div v-if="userInput" class="word-display" :key="'input-'+currentWordIndex">
@@ -96,7 +96,7 @@
         </div>
 
         <!-- L2 语境卡：答对后展示例句 -->
-        <div v-if="lastResult?.correct && currentWord?.example_l2" class="context-card">
+        <div v-if="featureFlags.example_enabled && lastResult?.correct && currentWord?.example_l2" class="context-card">
           <p class="context-label">例句</p>
           <p class="context-example">{{ currentWord.example_l2 }}</p>
           <p v-if="currentWord.example_l1" class="context-l1">{{ currentWord.example_l1 }}</p>
@@ -108,17 +108,17 @@
             <p class="deep-label">词源</p>
             <p class="deep-text">{{ currentWord.etymology }}</p>
           </div>
-          <div v-if="currentWord.mnemonic" class="deep-section">
+          <div v-if="featureFlags.mnemonic_enabled && currentWord.mnemonic" class="deep-section">
             <p class="deep-label">记忆锚点</p>
             <p class="deep-text">{{ currentWord.mnemonic }}</p>
           </div>
         </div>
 
         <!-- 视觉词卡 -->
-        <VisualWordCard v-if="currentWord?.image_url" :src="currentWord.image_url" :alt="currentWord.word" />
+        <VisualWordCard v-if="featureFlags.image_enabled && currentWord?.image_url" :src="currentWord.image_url" :alt="currentWord.word" />
 
         <!-- AI 生图按钮 (顽固词/答错后) -->
-        <div v-if="!lastResult?.correct && isStubborn && !currentWord?.image_url && !generatedImageUrl" class="gen-image-section">
+        <div v-if="featureFlags.image_enabled && !lastResult?.correct && isStubborn && !currentWord?.image_url && !generatedImageUrl" class="gen-image-section">
           <el-button text type="primary" :loading="generatingImage" @click.stop="handleGenerateImage">
             <el-icon><MagicStick /></el-icon> AI 生成视觉词卡
           </el-button>
@@ -190,7 +190,7 @@
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { studyAPI, aiAPI } from '../api'
+import { studyAPI, aiAPI, settingsAPI } from '../api'
 import { useResponsive } from '../composables/useResponsive'
 import SessionReport from '../components/SessionReport.vue'
 import VisualWordCard from '../components/VisualWordCard.vue'
@@ -239,6 +239,21 @@ const generatedImageUrl = ref('')
 const studyType = ref('new')
 const planId = ref<number | null>(null)
 const showPhonetic = ref(true)
+
+const featureFlags = reactive({
+  example_enabled: true,
+  image_enabled: true,
+  mnemonic_enabled: true,
+  error_analysis_enabled: true,
+  story_enabled: false,
+})
+
+const loadFeatureFlags = async () => {
+  try {
+    const { data } = await settingsAPI.getFeatureFlags()
+    Object.assign(featureFlags, data)
+  } catch { /* use defaults */ }
+}
 
 const loadPhoneticSetting = () => {
   const stored = localStorage.getItem('showPhonetic')
@@ -291,12 +306,16 @@ class AudioManager {
   async play(word: string) {
     this.stop()
     if (this.cache.has(word)) {
-      const a = this.cache.get(word)!; a.currentTime = 0; this.current = a; await a.play(); return
+      const a = this.cache.get(word)!; a.currentTime = 0; this.current = a
+      try { await a.play() } catch { /* fall through to TTS */ }
+      return
     }
     try {
       const a = new Audio(`/audio/${word[0].toLowerCase()}/${word.toLowerCase()}.mp3`)
-      await new Promise<void>((res, rej) => { a.oncanplaythrough = () => res(); a.onerror = () => rej(new Error()); a.load() })
-      this.cache.set(word, a); this.current = a; await a.play()
+      a.preload = 'auto'
+      this.cache.set(word, a)
+      this.current = a
+      await a.play()
     } catch {
       if ('speechSynthesis' in window) {
         const u = new SpeechSynthesisUtterance(word); u.lang = 'en-US'; u.rate = 0.8; speechSynthesis.speak(u)
@@ -304,9 +323,18 @@ class AudioManager {
     }
   }
 
-  async playWithMeaning(word: string, meaning: string) {
+  async playWithMeaning(word: string, meaning: string, contextAudio?: string) {
     this.stop()
     await this.play(word)
+    if (contextAudio) {
+      await new Promise(r => { this.ttsTimer = window.setTimeout(r, 800) })
+      try {
+        const a = new Audio(contextAudio)
+        this.current = a
+        await a.play()
+        return
+      } catch { /* fall through to TTS */ }
+    }
     await new Promise(r => { this.ttsTimer = window.setTimeout(r, 2000) })
     if ('speechSynthesis' in window) {
       const u = new SpeechSynthesisUtterance(meaning); u.lang = 'zh-CN'; u.rate = 1.0; speechSynthesis.speak(u)
@@ -319,7 +347,7 @@ const audio = new AudioManager()
 const playPronunciation = async () => {
   if (!currentWord.value) return
   isPlaying.value = true
-  try { await audio.playWithMeaning(currentWord.value.word, currentWord.value.meaning) } catch {}
+  try { await audio.playWithMeaning(currentWord.value.word, currentWord.value.meaning, currentWord.value.context_audio) } catch {}
   setTimeout(() => { isPlaying.value = false }, 3000)
 }
 
@@ -506,7 +534,7 @@ const initStudy = async () => {
 }
 
 onMounted(() => {
-  loadPhoneticSetting(); initStudy(); focusInput()
+  loadPhoneticSetting(); loadFeatureFlags(); initStudy(); focusInput()
   history.pushState(history.state, '', location.href)
   window.addEventListener('popstate', (e: PopStateEvent) => {
     if (!showRoundResult.value && !showQuitConfirm.value) { e.preventDefault(); showQuitConfirm.value = true; history.pushState(history.state, '', location.href) }

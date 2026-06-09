@@ -4,7 +4,7 @@ import os
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from .base import BaseProvider, ProviderConfig
+from .base import BaseProvider, ProviderConfig, RateLimitError
 from .deepseek import DeepSeekProvider
 from .minimax import MiniMaxProvider
 from . import prompts
@@ -13,6 +13,7 @@ from ... import models
 logger = logging.getLogger(__name__)
 
 IMAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "ai_images")
+CONTEXT_AUDIO_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "frontend", "public", "audio_context")
 
 
 class AiService:
@@ -22,6 +23,8 @@ class AiService:
         self.db = db
         self._deepseek: Optional[DeepSeekProvider] = None
         self._minimax: Optional[MiniMaxProvider] = None
+        ff = db.query(models.FeatureFlags).first()
+        self.flags = ff or models.FeatureFlags(id=1)
 
     def _get_config(self, provider: str) -> Optional[ProviderConfig]:
         cfg = self.db.query(models.ApiConfig).filter(
@@ -55,7 +58,9 @@ class AiService:
     # ========== 单词增强 ==========
 
     async def enrich_word(self, word_id: int) -> bool:
-        """为单个单词生成 AI 增强内容, 存入 DB"""
+        """为单个单词生成 AI 增强内容, 存入 DB.
+        RateLimitError 向上抛, 由 pipeline 统一处理等待/重试.
+        """
         word = self.db.query(models.Word).filter(models.Word.id == word_id).first()
         if not word:
             return False
@@ -75,43 +80,58 @@ class AiService:
                 {"role": "system", "content": "You are a vocabulary tutor. Return exactly the JSON requested, no extra text."},
                 {"role": "user", "content": prompt},
             ]
-            data = await self.deepseek.chat_json(messages, temperature=0.7, max_tokens=1024)
+            data = await self.deepseek.chat_json(messages, temperature=0.7, max_tokens=4096)
+        except RateLimitError:
+            raise  # 让 pipeline 知道
         except Exception as e:
             logger.error(f"DeepSeek enrichment failed for '{word.word}': {e}")
             return False
 
-        word.example_l1 = data.get("example_l1")
-        word.example_l2 = data.get("example_l2")
-        word.example_l3 = data.get("example_l3")
-        word.image_prompt = data.get("image_prompt")
-        word.mnemonic = data.get("mnemonic")
+        if self.flags.example_enabled:
+            word.example_l1 = data.get("example_l1")
+            word.example_l2 = data.get("example_l2")
+            word.example_l3 = data.get("example_l3")
+        if self.flags.image_enabled:
+            word.image_prompt = data.get("image_prompt")
+        if self.flags.mnemonic_enabled:
+            word.mnemonic = data.get("mnemonic")
         word.etymology = data.get("etymology")
         word.word_family = str(data.get("word_family")) if data.get("word_family") else None
         word.synonyms = str(data.get("synonyms")) if data.get("synonyms") else None
         word.enriched = True
         self.db.commit()
         logger.info(f"Enriched word: {word.word}")
+
+        # 生成语境发音 (MiniMax TTS 朗读 example_l2)
+        # 限流错误向上抛, 由 pipeline 等待下个窗口; 其他错误忽略 (不阻塞 enrich)
+        if self.flags.example_enabled and word.example_l2 and self.minimax:
+            try:
+                await self._generate_context_audio(word)
+            except RateLimitError:
+                raise  # 限流必须向外传播, 触发等待
+            except Exception as e:
+                logger.warning(f"Context audio failed for '{word.word}': {e}")
+
         return True
 
     async def enrich_bank(self, bank_id: int, progress_callback=None) -> dict:
         """批量增强整个词库"""
         words = self.db.query(models.Word).filter(models.Word.bank_id == bank_id).all()
+        unenriched = [w for w in words if not w.enriched]
+        skipped = len(words) - len(unenriched)
         total = len(words)
-        success = 0
+        success = skipped
         failed = 0
-        for i, word in enumerate(words):
-            if word.enriched:
-                success += 1
-                if progress_callback:
-                    progress_callback(i + 1, total)
-                continue
+        done = 0
+        for word in unenriched:
             ok = await self.enrich_word(word.id)
             if ok:
                 success += 1
             else:
                 failed += 1
+            done += 1
             if progress_callback:
-                progress_callback(i + 1, total)
+                progress_callback(done, len(unenriched))
         return {"total": total, "success": success, "failed": failed}
 
     async def generate_bank_images(self, bank_id: int, progress_callback=None) -> dict:
@@ -142,7 +162,11 @@ class AiService:
         return {"total": total, "success": success, "failed": failed, "skipped": skipped}
 
     async def generate_word_image(self, word_id: int) -> Optional[str]:
-        """为单词生成视觉词卡, 返回本地路径"""
+        """为单词生成视觉词卡, 返回本地路径.
+        遇到 RateLimitError 时向上抛, 由 pipeline 统一处理等待/重试.
+        """
+        if not self.flags.image_enabled:
+            return None
         word = self.db.query(models.Word).filter(models.Word.id == word_id).first()
         if not word or not word.image_prompt:
             return None
@@ -158,22 +182,73 @@ class AiService:
             self.db.commit()
             return filepath
 
-        try:
-            img_data = await self.minimax.generate_image(word.image_prompt)
-            with open(filepath, "wb") as f:
-                f.write(img_data)
-            word.image_url = filepath
+        img_data = await self.minimax.generate_image(word.image_prompt)
+        with open(filepath, "wb") as f:
+            f.write(img_data)
+        word.image_url = filepath
+        self.db.commit()
+        logger.info(f"Generated image for: {word.word}")
+        return filepath
+
+    async def _generate_context_audio(self, word) -> bool:
+        """为单词的例句生成 MiniMax TTS 语境发音.
+        遇到 RateLimitError 时向上抛, 由 pipeline 统一处理等待/重试.
+        """
+        if not word.example_l2 or not self.minimax:
+            return False
+
+        os.makedirs(CONTEXT_AUDIO_DIR, exist_ok=True)
+        filename = f"{word.word.lower().replace(' ', '_')}.mp3"
+        filepath = os.path.join(CONTEXT_AUDIO_DIR, filename)
+
+        if os.path.exists(filepath):
+            word.context_audio = f"/audio_context/{filename}"
             self.db.commit()
-            logger.info(f"Generated image for: {word.word}")
-            return filepath
-        except Exception as e:
-            logger.error(f"Image generation failed for '{word.word}': {e}")
-            return None
+            return True
+
+        audio_data = await self.minimax.text_to_speech(
+            word.example_l2, voice="default", speed=0.9
+        )
+        with open(filepath, "wb") as f:
+            f.write(audio_data)
+        word.context_audio = f"/audio_context/{filename}"
+        self.db.commit()
+        logger.info(f"Generated context audio for: {word.word}")
+        return True
+
+    async def generate_context_audio_batch(self, bank_id: int, progress_callback=None) -> dict:
+        """批量生成词库的语境发音"""
+        words = self.db.query(models.Word).filter(
+            models.Word.bank_id == bank_id,
+            models.Word.enriched == True,
+            models.Word.example_l2 != None,
+            models.Word.example_l2 != "",
+        ).all()
+        total = len(words)
+        success = 0
+        failed = 0
+        skipped = 0
+        for i, word in enumerate(words):
+            if word.context_audio and os.path.exists(
+                os.path.join(CONTEXT_AUDIO_DIR, f"{word.word.lower().replace(' ', '_')}.mp3")
+            ):
+                skipped += 1
+            else:
+                ok = await self._generate_context_audio(word)
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+            if progress_callback:
+                progress_callback(i + 1, total)
+        return {"total": total, "success": success, "failed": failed, "skipped": skipped}
 
     # ========== 错题分析 ==========
 
     async def analyze_errors(self, errors: list[dict]) -> dict:
         """分析错题模式"""
+        if not self.flags.error_analysis_enabled:
+            return {"patterns": [], "summary": ""}
         if not self.deepseek:
             return {"patterns": [], "summary": "AI 未配置"}
         try:
@@ -193,6 +268,8 @@ class AiService:
 
     async def generate_story(self, words: list[str]) -> str:
         """用错词生成微故事"""
+        if not self.flags.story_enabled:
+            return ""
         if not self.deepseek:
             return ""
         try:

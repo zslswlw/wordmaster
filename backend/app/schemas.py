@@ -11,6 +11,7 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
+    role: str = "user"
     created_at: datetime
 
     class Config:
@@ -29,7 +30,6 @@ class WordBankCreate(BaseModel):
 class WordBankResponse(BaseModel):
     id: int
     name: str
-    user_id: int
     word_count: int
     created_at: datetime
 
@@ -43,6 +43,7 @@ class WordResponse(BaseModel):
     word: str
     phonetic: Optional[str]
     meaning: str
+    context_audio: Optional[str] = None
 
     class Config:
         from_attributes = True
