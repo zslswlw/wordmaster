@@ -187,7 +187,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { studyAPI, aiAPI, settingsAPI } from '../api'
@@ -195,6 +195,8 @@ import { useResponsive } from '../composables/useResponsive'
 import SessionReport from '../components/SessionReport.vue'
 import VisualWordCard from '../components/VisualWordCard.vue'
 import { ArrowLeft, VideoPlay, ChatDotRound, MagicStick, Picture } from '@element-plus/icons-vue'
+
+defineOptions({ name: 'Study' })
 
 const router = useRouter()
 const route = useRoute()
@@ -500,7 +502,14 @@ const closeSessionReport = () => {
 const quitStudy = () => { showQuitConfirm.value = false; router.push('/groups') }
 
 // --- 初始化 ---
-const initStudy = async () => {
+// 用路由参数组合成唯一 key，避免同一组件重复初始化或不同 session 串了
+const initKey = ref('')
+const getInitKey = () => `${route.params.id || ''}-${route.query.planId || ''}-${route.query.isReview || ''}`
+
+const initStudy = async (force = false) => {
+  const key = getInitKey()
+  if (!force && initKey.value === key) return  // 同一 session 已初始化过，不重跑
+  initKey.value = key
   const id = route.params.id; const qId = route.query.groupId
   groupId.value = (id && !isNaN(Number(id))) ? Number(id) : (qId && !isNaN(Number(qId)) ? Number(qId) : 0)
   if (!groupId.value) { ElMessage.error('无效的学习组ID'); router.push('/groups'); return }
@@ -555,6 +564,23 @@ onMounted(() => {
       } else if (answerSubmitted.value) { handleNext() }
     }
   })
+})
+
+// 路由离开时不重复初始化；激活时只恢复焦点，不重置进度
+onActivated(() => { focusInput() })
+onDeactivated(() => { audio.stop() })
+
+// 监听路由变化：切到不同的 study session（不同 groupId / planId）才重新初始化
+watch(getInitKey, (newKey, oldKey) => {
+  if (newKey && newKey !== oldKey && newKey !== initKey.value) {
+    // 显式重置状态再重跑 init
+    currentIndex.value = 0; words.value = []; wordIds.value = []
+    enhanceIndex.value = 0; enhanceWords.value = []; enhanceWordIds.value = []
+    userInput.value = ''; answerSubmitted.value = false; lastResult.value = null
+    sessionErrors.value = []; Object.keys(stubbornCount).forEach(k => delete stubbornCount[Number(k)])
+    showRoundResult.value = false; showSessionReport.value = false
+    initStudy(true)
+  }
 })
 
 watch(userInput, () => { if (!answerSubmitted.value) focusInput() })

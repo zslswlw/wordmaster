@@ -49,7 +49,9 @@
         <el-main :class="['main', { 'main-mobile': !isDesktop }]">
           <router-view v-slot="{ Component }">
             <transition name="fade" mode="out-in">
-              <component :is="Component" />
+              <keep-alive :include="['Study']">
+                <component :is="Component" />
+              </keep-alive>
             </transition>
           </router-view>
         </el-main>

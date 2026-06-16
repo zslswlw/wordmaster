@@ -224,24 +224,30 @@ def start_review(
         StudyRecord.plan_id == plan_id,
         StudyRecord.study_type == "review"
     ).all()
-    
+
     if existing_records:
         # 获取当前轮次
         current_round = max(r.round for r in existing_records)
         # 获取当前轮次的错误单词ID
         wrong_word_ids = [r.word_id for r in existing_records if not r.correct and r.round == current_round]
-        
+
         if wrong_word_ids:
             # 继续复习：只返回错误单词
             word_ids = wrong_word_ids
         else:
-            # 全部正确，返回该组所有单词（可能是新的一轮复习）
-            words = db.query(Word).filter(
-                Word.bank_id == group.bank_id,
-                Word.seq_num >= group.start_seq,
-                Word.seq_num <= group.end_seq
-            ).all()
-            word_ids = [w.id for w in words]
+            # 全部正确 → 本轮已结束，标记计划完成，不再返新轮单词
+            plan.status = "completed"
+            plan.completed_at = datetime.utcnow()
+            db.commit()
+            return {
+                "plan_id": plan_id,
+                "group_id": group.id,
+                "group_name": group.name,
+                "review_round": plan.review_round,
+                "total_words": 0,
+                "word_ids": [],
+                "is_completed": True,
+            }
     else:
         # 首次复习：返回该组所有单词
         words = db.query(Word).filter(
@@ -250,9 +256,9 @@ def start_review(
             Word.seq_num <= group.end_seq
         ).all()
         word_ids = [w.id for w in words]
-    
+
     random.shuffle(word_ids)
-    
+
     return {
         "plan_id": plan_id,
         "group_id": group.id,
