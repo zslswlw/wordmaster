@@ -19,7 +19,7 @@ os.environ["TEST_RANDOM_SEED"] = "0"
 from app.auth import create_access_token
 from app.clock import MutableBusinessClock, set_clock
 from app.main import app
-from app.models import Base, User, get_db
+from app.models import Base, User, configure_sqlite_connection, get_db
 
 
 @pytest.fixture
@@ -27,8 +27,11 @@ def api(tmp_path):
     db_path = tmp_path / "wordmaster-test-case.db"
     engine = create_engine(
         f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
     )
+    from sqlalchemy import event
+
+    event.listen(engine, "connect", configure_sqlite_connection)
     Base.metadata.create_all(bind=engine)
     testing_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     clock = MutableBusinessClock(

@@ -94,7 +94,7 @@ def _raise_for_body_error(data: Any, operation: str) -> None:
 class MiniMaxProvider(BaseProvider):
     """MiniMax API
 
-    文本模型: MiniMax-M2.7
+    文本模型: MiniMax-M3
     图像生成: image-01
     语音合成: speech-2.8-turbo
     """
@@ -110,7 +110,7 @@ class MiniMaxProvider(BaseProvider):
         }
 
     async def chat(self, messages: list[dict], **kwargs) -> str:
-        model = kwargs.pop("model", self.config.text_model or "MiniMax-M2.7")
+        model = kwargs.pop("model", self.config.text_model or "MiniMax-M3")
         async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
             resp = await client.post(
                 self._endpoint("/v1/text/chatcompletion_v2"),

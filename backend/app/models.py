@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import (
@@ -19,9 +19,30 @@ from .clock import utc_now
 
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./wordmaster.db")
 
+_is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite:")
+
+
+def configure_sqlite_connection(dbapi_connection, _connection_record=None):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+    SQLALCHEMY_DATABASE_URL,
+    connect_args=(
+        {"check_same_thread": False, "timeout": 30}
+        if _is_sqlite
+        else {}
+    ),
 )
+
+
+if _is_sqlite:
+    event.listen(engine, "connect", configure_sqlite_connection)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
@@ -49,6 +70,9 @@ class WordBank(Base):
 
 class Word(Base):
     __tablename__ = "words"
+    __table_args__ = (
+        Index("ix_words_bank_seq", "bank_id", "seq_num"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     bank_id = Column(Integer, ForeignKey("word_banks.id"), nullable=False)
@@ -310,6 +334,13 @@ class AiJob(Base):
     __tablename__ = "ai_jobs"
     __table_args__ = (
         Index("ix_ai_jobs_dispatch", "status", "priority", "available_at"),
+        Index(
+            "ix_ai_jobs_bank_status",
+            "bank_id",
+            "status",
+            "priority",
+            "available_at",
+        ),
     )
 
     id = Column(String(36), primary_key=True)

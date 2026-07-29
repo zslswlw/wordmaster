@@ -159,6 +159,7 @@ export const aiAPI = {
     api.post('/ai/evolution/exposures', data),
   bankCoverage: (bankId: number) => api.get(`/ai/evolution/banks/${bankId}/coverage`),
   seedBank: (bankId: number) => api.post(`/ai/evolution/banks/${bankId}/seed`),
+  dashboard: () => api.get('/ai/evolution/dashboard'),
   quota: () => api.get('/ai/evolution/quota'),
   jobs: (status?: string) => api.get('/ai/evolution/jobs', { params: { status } }),
   worker: () => api.get('/ai/evolution/worker'),

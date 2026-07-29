@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..auth import get_admin_user, get_current_user
 from ..clock import utc_now
+from ..services.ai.worker import silent_worker_status
 from ..services.learning_content import (
     MeaningNormalizer,
     build_lexeme_key,
@@ -151,6 +153,61 @@ def _job_summary(db: Session, bank_id: Optional[int] = None) -> dict:
         "current_job": serialize(current),
         "next_job": serialize(next_job),
         "last_activity_at": latest.updated_at if latest else None,
+    }
+
+
+def _quota_payload(db: Session) -> dict:
+    snapshot = db.query(models.AiQuotaSnapshot).filter(
+        models.AiQuotaSnapshot.provider == "minimax",
+    ).order_by(models.AiQuotaSnapshot.checked_at.desc()).first()
+    if not snapshot:
+        return {"status": "unknown", "remaining_percent": None, "checked_at": None}
+    return {
+        "status": snapshot.status,
+        "remaining_percent": snapshot.remaining_percent,
+        "reset_at": snapshot.reset_at,
+        "checked_at": snapshot.checked_at,
+    }
+
+
+def _worker_payload(db: Session) -> dict:
+    flags = _flags(db)
+    queue = _job_summary(db)
+    runtime = silent_worker_status()
+    heartbeat = runtime.get("heartbeat_at")
+    heartbeat_stale = (
+        heartbeat is None
+        or utc_now() - heartbeat > timedelta(seconds=20)
+    )
+    next_job = queue.get("next_job") or {}
+    next_error = next_job.get("last_error_code")
+
+    if flags.ai_worker_paused:
+        state = "paused"
+    elif not runtime.get("alive") or heartbeat_stale:
+        state = "stalled" if queue["active_jobs"] else "idle"
+    elif queue.get("current_job"):
+        state = "running"
+    elif queue["counts"].get("pending", 0):
+        if next_error in {"quota_reserve", "2056"}:
+            state = "waiting_quota"
+        elif next_error in {"rate_limited", "1002", "2045"}:
+            state = "waiting_rate_limit"
+        else:
+            state = "queued"
+    elif queue["counts"].get("failed", 0):
+        state = "attention"
+    else:
+        state = "idle"
+
+    return {
+        "paused": flags.ai_worker_paused,
+        "state": state,
+        "quota_reserve_percent": flags.quota_reserve_percent,
+        "feedback_reserve_percent": flags.feedback_reserve_percent,
+        "priority_bank_id": flags.priority_bank_id,
+        "queue": queue,
+        "runtime": runtime,
     }
 
 
@@ -381,17 +438,7 @@ def get_quota(
     db: Session = Depends(models.get_db),
     admin: models.User = Depends(get_admin_user),
 ):
-    snapshot = db.query(models.AiQuotaSnapshot).filter(
-        models.AiQuotaSnapshot.provider == "minimax",
-    ).order_by(models.AiQuotaSnapshot.checked_at.desc()).first()
-    if not snapshot:
-        return {"status": "unknown", "remaining_percent": None, "checked_at": None}
-    return {
-        "status": snapshot.status,
-        "remaining_percent": snapshot.remaining_percent,
-        "reset_at": snapshot.reset_at,
-        "checked_at": snapshot.checked_at,
-    }
+    return _quota_payload(db)
 
 
 @router.get("/jobs")
@@ -437,15 +484,39 @@ def get_worker(
     db: Session = Depends(models.get_db),
     admin: models.User = Depends(get_admin_user),
 ):
-    flags = _flags(db)
-    queue = _job_summary(db)
+    return _worker_payload(db)
+
+
+@router.get("/dashboard")
+def evolution_dashboard(
+    db: Session = Depends(models.get_db),
+    admin: models.User = Depends(get_admin_user),
+):
+    banks = db.query(models.WordBank).order_by(
+        models.WordBank.created_at.asc(),
+        models.WordBank.id.asc(),
+    ).all()
+    bank_rows = []
+    for bank in banks:
+        coverage = coverage_for_bank(db, bank.id)
+        bank_rows.append({
+            "id": bank.id,
+            "name": bank.name,
+            "word_count": bank.word_count,
+            **coverage,
+            "queue": _job_summary(db, bank.id),
+        })
+    feedback_count = db.query(func.count(models.MemoryFeedback.id)).filter(
+        models.MemoryFeedback.status.in_(["pending", "generating", "manual_review"]),
+    ).scalar() or 0
+    worker = _worker_payload(db)
     return {
-        "paused": flags.ai_worker_paused,
-        "state": "paused" if flags.ai_worker_paused else queue["state"],
-        "quota_reserve_percent": flags.quota_reserve_percent,
-        "feedback_reserve_percent": flags.feedback_reserve_percent,
-        "priority_bank_id": flags.priority_bank_id,
-        "queue": queue,
+        "observed_at": utc_now(),
+        "worker": worker,
+        "jobs": worker["queue"]["counts"],
+        "quota": _quota_payload(db),
+        "banks": bank_rows,
+        "feedback_pending": int(feedback_count),
     }
 
 

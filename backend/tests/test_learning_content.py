@@ -1,3 +1,7 @@
+import time
+
+from sqlalchemy import event
+
 from app import models
 from app.services.learning_content import (
     LearningContentResolver,
@@ -89,7 +93,9 @@ def test_resolver_prefers_active_bundle_without_changing_word_facts(api):
     assert word.word == "open"
     assert word.phonetic == "/open/"
     assert word.meaning == "vt. 打开；开启"
-    assert coverage_for_bank(session, bank.id)["complete_ready_percent"] == 100
+    coverage = coverage_for_bank(session, bank.id)
+    assert coverage["text_ready_percent"] == 100
+    assert coverage["complete_ready_percent"] == 100
     session.close()
 
 
@@ -170,6 +176,53 @@ def test_same_lexeme_reuses_active_bundle(api):
 
     assert [link.active_bundle_id for link in links] == [bundle.id, bundle.id]
     assert session.query(models.AiJob).filter(models.AiJob.kind == "bundle_text").count() == 0
+    session.close()
+
+
+def test_large_bank_coverage_uses_one_fast_aggregate_query(api):
+    session = api["session"]()
+    bank = models.WordBank(
+        name="large",
+        user_id=api["user_id"],
+        word_count=10_000,
+    )
+    session.add(bank)
+    session.flush()
+    bank_id = bank.id
+    session.bulk_insert_mappings(
+        models.Word,
+        [
+            {
+                "bank_id": bank_id,
+                "seq_num": index,
+                "word": f"word-{index}",
+                "phonetic": "",
+                "meaning": "n. 测试",
+            }
+            for index in range(1, 10_001)
+        ],
+    )
+    session.commit()
+
+    statements = []
+
+    def count_statement(*_args):
+        statements.append(1)
+
+    event.listen(session.bind, "before_cursor_execute", count_statement)
+    started = time.perf_counter()
+    try:
+        coverage = coverage_for_bank(session, bank_id)
+    finally:
+        elapsed = time.perf_counter() - started
+        event.remove(session.bind, "before_cursor_execute", count_statement)
+
+    assert coverage["total"] == 10_000
+    assert coverage["text_ready"] == 0
+    assert coverage["visual_ready"] == 0
+    assert coverage["complete_ready"] == 0
+    assert len(statements) == 1
+    assert elapsed < 0.5
     session.close()
 
 

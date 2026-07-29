@@ -52,21 +52,22 @@ def list_configs(db: Session = Depends(get_db), admin=Depends(get_admin_user)):
 
 @router.post("/ai-configs")
 def create_config(data: ApiConfigCreate, db: Session = Depends(get_db), admin=Depends(get_admin_user)):
-    existing = db.query(ApiConfig).filter(ApiConfig.provider == data.provider).first()
+    model_data = _normalized_provider_values(data)
+    existing = db.query(ApiConfig).filter(
+        ApiConfig.provider == model_data["provider"],
+    ).first()
     if existing:
-        if data.api_key:
-            existing.api_key_encrypted = encrypt_secret(data.api_key)
-        existing.api_base = data.api_base
-        existing.text_model = data.text_model
-        existing.image_model = data.image_model
-        existing.speech_model = data.speech_model
-        existing.is_enabled = data.is_enabled
+        api_key = model_data.pop("api_key")
+        if api_key:
+            existing.api_key_encrypted = encrypt_secret(api_key)
+        for key, value in model_data.items():
+            if key != "provider":
+                setattr(existing, key, value)
         db.commit()
         return {"id": existing.id, "message": "配置已更新"}
 
-    if not data.api_key:
+    if not model_data["api_key"]:
         raise HTTPException(400, "首次配置需要填写 API Key")
-    model_data = data.model_dump()
     model_data["api_key_encrypted"] = encrypt_secret(model_data.pop("api_key"))
     cfg = ApiConfig(**model_data)
     db.add(cfg)
@@ -80,7 +81,7 @@ def update_config(config_id: int, data: ApiConfigCreate, db: Session = Depends(g
     cfg = db.query(ApiConfig).filter(ApiConfig.id == config_id).first()
     if not cfg:
         raise HTTPException(404, "配置不存在")
-    model_data = data.model_dump()
+    model_data = _normalized_provider_values(data)
     api_key = model_data.pop("api_key")
     if api_key:
         model_data["api_key_encrypted"] = encrypt_secret(api_key)
@@ -103,25 +104,30 @@ def delete_config(config_id: int, db: Session = Depends(get_db), admin=Depends(g
 @router.post("/ai-configs/test")
 async def test_connection(data: ApiConfigCreate, db: Session = Depends(get_db), admin=Depends(get_admin_user)):
     """测试 API 连接"""
-    api_key = data.api_key
+    model_data = _normalized_provider_values(data)
+    api_key = model_data["api_key"]
     if not api_key:
-        stored = db.query(ApiConfig).filter(ApiConfig.provider == data.provider).first()
+        stored = db.query(ApiConfig).filter(
+            ApiConfig.provider == model_data["provider"],
+        ).first()
         if stored:
             api_key = decrypt_secret(stored.api_key_encrypted)
     if not api_key:
         return {"success": False, "message": "请先保存 API Key"}
     config = ProviderConfig(
-        api_key=api_key, api_base=data.api_base,
-        text_model=data.text_model, image_model=data.image_model or "",
-        speech_model=data.speech_model or "",
+        api_key=api_key,
+        api_base=model_data["api_base"],
+        text_model=model_data["text_model"],
+        image_model=model_data["image_model"] or "",
+        speech_model=model_data["speech_model"] or "",
     )
     try:
-        if data.provider == "deepseek":
+        if model_data["provider"] == "deepseek":
             provider = DeepSeekProvider(config)
-        elif data.provider == "minimax":
+        elif model_data["provider"] == "minimax":
             provider = MiniMaxProvider(config)
         else:
-            return {"success": False, "message": f"未知 provider: {data.provider}"}
+            return {"success": False, "message": f"未知 provider: {model_data['provider']}"}
 
         ok, msg = await provider.test_connection()
         return {"success": ok, "message": msg}
@@ -135,6 +141,23 @@ class FeatureFlagsUpdate(BaseModel):
     mnemonic_enabled: bool = True
     error_analysis_enabled: bool = True
     story_enabled: bool = False
+
+
+def _normalized_provider_values(data: ApiConfigCreate) -> dict:
+    values = data.model_dump()
+    if values["provider"].lower() != "minimax":
+        return values
+    old_base = (values["api_base"] or "").rstrip("/").lower()
+    if old_base in {"https://api.minimax.chat", "http://api.minimax.chat"}:
+        values["api_base"] = "https://api.minimaxi.com"
+    model = (values["text_model"] or "").strip()
+    if not model or model.lower().startswith("minimax-m2"):
+        values["text_model"] = "MiniMax-M3"
+    if not values["image_model"]:
+        values["image_model"] = "image-01"
+    if not values["speech_model"] or values["speech_model"].lower() == "speech-02":
+        values["speech_model"] = "speech-2.8-turbo"
+    return values
 
 
 def _get_feature_flags(db: Session) -> FeatureFlags:

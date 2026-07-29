@@ -18,13 +18,13 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
         CREATE TABLE word_banks (
             id INTEGER PRIMARY KEY,
             name VARCHAR NOT NULL,
-            user_id INTEGER,
+            user_id INTEGER NOT NULL REFERENCES users(id),
             word_count INTEGER,
             created_at DATETIME
         );
         CREATE TABLE words (
             id INTEGER PRIMARY KEY,
-            bank_id INTEGER,
+            bank_id INTEGER REFERENCES word_banks(id),
             seq_num INTEGER,
             word VARCHAR,
             phonetic VARCHAR,
@@ -33,7 +33,7 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
         CREATE TABLE study_groups (
             id INTEGER PRIMARY KEY,
             user_id INTEGER,
-            bank_id INTEGER,
+            bank_id INTEGER REFERENCES word_banks(id),
             name VARCHAR,
             start_seq INTEGER,
             end_seq INTEGER,
@@ -58,6 +58,16 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
             plan_id INTEGER,
             studied_at DATETIME
         );
+        CREATE TABLE api_configs (
+            id INTEGER PRIMARY KEY,
+            provider VARCHAR NOT NULL,
+            api_key_encrypted VARCHAR NOT NULL,
+            api_base VARCHAR NOT NULL,
+            text_model VARCHAR,
+            image_model VARCHAR,
+            speech_model VARCHAR,
+            is_enabled BOOLEAN
+        );
         INSERT INTO users VALUES (1, 'tester', 'hash', '2026-01-01');
         INSERT INTO word_banks VALUES (1, 'bank', 1, 1, '2026-01-01');
         INSERT INTO words (id, bank_id, seq_num, word, phonetic, meaning)
@@ -70,6 +80,16 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
             (20, 1, 1, 1, 0, 'review', 11, '2026-01-02');
         INSERT INTO study_records VALUES
             (21, 1, 1, 1, 1, 'review', 11, '2026-01-02');
+        INSERT INTO api_configs VALUES (
+            1,
+            'minimax',
+            'legacy-secret',
+            'https://api.minimax.chat',
+            'minimax-m2.7',
+            '',
+            'speech-02',
+            1
+        );
         """
     )
     conn.commit()
@@ -98,6 +118,12 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
         assert "user_input" in {
             row[1] for row in cursor.execute("PRAGMA table_info(study_records)")
         }
+        assert "ix_ai_jobs_bank_status" in {
+            row[1] for row in cursor.execute("PRAGMA index_list(ai_jobs)").fetchall()
+        }
+        assert "ix_words_bank_seq" in {
+            row[1] for row in cursor.execute("PRAGMA index_list(words)").fetchall()
+        }
         tables = {
             row[0]
             for row in cursor.execute(
@@ -113,6 +139,22 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
             "ai_jobs",
             "ai_quota_snapshots",
         }.issubset(tables)
+        minimax = cursor.execute(
+            """
+            SELECT api_key_encrypted, api_base, text_model, image_model, speech_model
+            FROM api_configs
+            WHERE provider = 'minimax'
+            """
+        ).fetchone()
+        assert minimax[0].startswith("enc:v1:")
+        assert "legacy-secret" not in minimax[0]
+        assert minimax[1:] == (
+            "https://api.minimaxi.com",
+            "MiniMax-M3",
+            "image-01",
+            "speech-2.8-turbo",
+        )
+        assert cursor.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
         with __import__("pytest").raises(sqlite3.IntegrityError):
             cursor.execute(

@@ -1,10 +1,12 @@
 import asyncio
+import threading
+from datetime import timedelta, timezone
 from types import SimpleNamespace
 
 from app import models
 from app.clock import utc_now
 from app.services.ai import MemoryBundleCandidate, MemoryQualityScores
-from app.services.ai.worker import AiJobProcessor
+from app.services.ai.worker import AiJobProcessor, _extract_quota_state
 from app.services.learning_content import (
     LearningContentResolver,
     queue_ai_job,
@@ -14,7 +16,7 @@ from app.services.learning_content import (
 
 class FakeMiniMax:
     config = SimpleNamespace(
-        text_model="MiniMax-M2.7",
+        text_model="MiniMax-M3",
         image_model="image-01",
         speech_model="speech-2.8-turbo",
     )
@@ -53,6 +55,15 @@ class FakeAiService:
             ),
             approved=True,
         )
+
+
+class SlowAiService(FakeAiService):
+    started = threading.Event()
+
+    async def generate_memory_candidate(self, word, feedback_context=""):
+        self.started.set()
+        await asyncio.sleep(0.2)
+        return await super().generate_memory_candidate(word, feedback_context)
 
 
 def _run(coro):
@@ -270,5 +281,205 @@ def test_running_job_recovers_after_restart_and_status_survives_refresh(api):
 
     assert resumed.json()["queue"]["state"] == "queued"
     assert resumed.json()["queue"]["active_jobs"] == 1
-    assert worker.json()["state"] == "queued"
+    assert worker.json()["state"] == "stalled"
     assert worker.json()["queue"]["next_job"]["id"] == job_id
+
+
+def test_quota_parser_understands_production_token_plan_payload():
+    payload = {
+        "model_remains": [
+            {
+                "model_name": "general",
+                "current_interval_remaining_percent": 74,
+                "current_weekly_remaining_percent": 86,
+                "end_time": 1785326400000,
+                "weekly_end_time": 1785686400000,
+            },
+            {
+                "model_name": "video",
+                "current_interval_remaining_percent": 100,
+                "current_weekly_remaining_percent": 100,
+                "end_time": 1785340800000,
+                "weekly_end_time": 1785686400000,
+            },
+        ],
+        "base_resp": {"status_code": 0, "status_msg": "success"},
+    }
+
+    remaining, reset_at = _extract_quota_state(payload)
+
+    assert remaining == 74
+    assert int(reset_at.replace(tzinfo=timezone.utc).timestamp() * 1000) == 1785326400000
+
+
+def test_stale_running_job_is_recovered_without_touching_current_job(api):
+    session = api["session"]()
+    now = utc_now()
+    stale = models.AiJob(
+        id="stale-job",
+        kind="bundle_text",
+        target_type="word",
+        target_id=1,
+        priority=10,
+        status="running",
+        attempts=1,
+        available_at=now,
+        idempotency_key="stale-job",
+        created_at=now - timedelta(minutes=20),
+        updated_at=now - timedelta(minutes=11),
+    )
+    current = models.AiJob(
+        id="current-job",
+        kind="bundle_text",
+        target_type="word",
+        target_id=2,
+        priority=10,
+        status="running",
+        attempts=1,
+        available_at=now,
+        idempotency_key="current-job",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add_all([stale, current])
+    session.commit()
+
+    assert AiJobProcessor(session).recover_stale() == 1
+    session.refresh(stale)
+    session.refresh(current)
+
+    assert stale.status == "pending"
+    assert stale.last_error_code == "stale_recovered"
+    assert current.status == "running"
+    session.close()
+
+
+def test_dashboard_returns_one_consistent_persistent_snapshot(api, monkeypatch):
+    from app.routers import ai_evolution
+
+    now = utc_now()
+    monkeypatch.setattr(
+        ai_evolution,
+        "silent_worker_status",
+        lambda: {
+            "alive": True,
+            "heartbeat_at": now,
+            "last_success_at": None,
+            "last_error": None,
+        },
+    )
+    session = api["session"]()
+    bank = models.WordBank(name="dashboard", user_id=api["user_id"], word_count=1)
+    session.add(bank)
+    session.flush()
+    word = models.Word(
+        bank_id=bank.id,
+        seq_num=1,
+        word="continue",
+        phonetic="",
+        meaning="v. 继续",
+    )
+    session.add(word)
+    session.flush()
+    seed_word_evolution(session, word)
+    session.commit()
+    bank_id = bank.id
+    session.close()
+
+    response = api["client"].get(
+        "/api/ai/evolution/dashboard",
+        headers=api["headers"],
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["worker"]["state"] == "queued"
+    assert payload["jobs"]["pending"] == 1
+    assert payload["banks"] == [{
+        "id": bank_id,
+        "name": "dashboard",
+        "word_count": 1,
+        "bank_id": bank_id,
+        "total": 1,
+        "text_ready": 0,
+        "visual_ready": 0,
+        "complete_ready": 0,
+        "text_ready_percent": 0,
+        "visual_ready_percent": 0,
+        "complete_ready_percent": 0,
+        "queue": payload["banks"][0]["queue"],
+    }]
+    assert payload["banks"][0]["queue"]["active_jobs"] == 1
+
+
+def test_dashboard_polling_does_not_interrupt_running_worker(api, monkeypatch):
+    from app.services.ai import worker as worker_module
+
+    SlowAiService.started.clear()
+    monkeypatch.setattr(worker_module, "AiService", SlowAiService)
+    session = api["session"]()
+    bank = models.WordBank(name="concurrent", user_id=api["user_id"], word_count=1)
+    session.add(bank)
+    session.flush()
+    word = models.Word(
+        bank_id=bank.id,
+        seq_num=1,
+        word="steady",
+        phonetic="",
+        meaning="adj. 稳定的",
+    )
+    session.add(word)
+    session.flush()
+    seed_word_evolution(session, word)
+    session.add(models.AiQuotaSnapshot(
+        provider="minimax",
+        remaining_percent=80,
+        status="available",
+        checked_at=utc_now(),
+    ))
+    session.commit()
+    job_id = session.query(models.AiJob).filter_by(kind="bundle_text").one().id
+    session.close()
+
+    result = {}
+
+    def run_worker():
+        worker_session = api["session"]()
+        try:
+            result["processed"] = _run(AiJobProcessor(worker_session).process_next())
+        finally:
+            worker_session.close()
+
+    thread = threading.Thread(target=run_worker)
+    thread.start()
+    assert SlowAiService.started.wait(timeout=1)
+
+    responses = [
+        api["client"].get(
+            "/api/ai/evolution/dashboard",
+            headers=api["headers"],
+        )
+        for _ in range(5)
+    ]
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert all(response.status_code == 200 for response in responses)
+    assert any(
+        response.json()["worker"]["queue"]["current_job"]["id"] == job_id
+        for response in responses
+        if response.json()["worker"]["queue"]["current_job"]
+    )
+    assert result == {"processed": True}
+
+    session = api["session"]()
+    job = session.get(models.AiJob, job_id)
+    assert job.status == "completed"
+    assert job.attempts == 1
+    assert session.connection().exec_driver_sql(
+        "PRAGMA journal_mode"
+    ).scalar().lower() == "wal"
+    assert session.connection().exec_driver_sql(
+        "PRAGMA busy_timeout"
+    ).scalar() == 30000
+    session.close()

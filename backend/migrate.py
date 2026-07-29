@@ -304,6 +304,12 @@ def _migrate_study_core(cursor, existing_tables):
 def migrate(db_path=None):
     target_path = os.path.abspath(db_path or DB_PATH)
     conn = sqlite3.connect(target_path)
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    # Legacy migrations rebuild referenced tables. Keep FK checks disabled only
+    # for this migration connection; application connections enable them.
+    conn.execute("PRAGMA foreign_keys=OFF")
     cursor = conn.cursor()
 
     # 检查 words 表是否存在
@@ -335,6 +341,10 @@ def migrate(db_path=None):
     # 创建新表（幂等，兼容新旧数据库）
     if not words_table_exists:
         conn = sqlite3.connect(target_path)
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=OFF")
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         existing_tables = {row[0] for row in cursor.fetchall()}
@@ -420,6 +430,14 @@ def migrate(db_path=None):
         "CREATE INDEX IF NOT EXISTS ix_ai_jobs_dispatch "
         "ON ai_jobs(status, priority, available_at)"
     )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_ai_jobs_bank_status "
+        "ON ai_jobs(bank_id, status, priority, available_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_words_bank_seq "
+        "ON words(bank_id, seq_num)"
+    )
 
     # Existing plaintext keys are encrypted in place; already encrypted values are untouched.
     if "api_configs" in existing_tables:
@@ -437,6 +455,51 @@ def migrate(db_path=None):
             print("  ✓ API Key 已使用 APP_SECRET_KEY 加密")
         except ImportError:
             print("  ! 未找到加密依赖，API Key 暂未迁移")
+
+        cursor.execute(
+            """
+            UPDATE api_configs
+            SET api_base = 'https://api.minimaxi.com'
+            WHERE lower(provider) = 'minimax'
+              AND lower(rtrim(api_base, '/')) IN (
+                  'https://api.minimax.chat',
+                  'http://api.minimax.chat'
+              )
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE api_configs
+            SET text_model = 'MiniMax-M3'
+            WHERE lower(provider) = 'minimax'
+              AND (
+                  text_model IS NULL
+                  OR trim(text_model) = ''
+                  OR lower(trim(text_model)) LIKE 'minimax-m2%'
+              )
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE api_configs
+            SET image_model = 'image-01'
+            WHERE lower(provider) = 'minimax'
+              AND (image_model IS NULL OR trim(image_model) = '')
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE api_configs
+            SET speech_model = 'speech-2.8-turbo'
+            WHERE lower(provider) = 'minimax'
+              AND (
+                  speech_model IS NULL
+                  OR trim(speech_model) = ''
+                  OR lower(trim(speech_model)) = 'speech-02'
+              )
+            """
+        )
+        print("  ✓ MiniMax 旧配置已升级到中国区 MiniMax-M3")
 
     conn.commit()
     conn.close()

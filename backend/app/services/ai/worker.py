@@ -3,11 +3,12 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import case
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from ... import models
@@ -24,6 +25,7 @@ from .base import ProviderError, QuotaExhaustedError, RateLimitError
 
 logger = logging.getLogger(__name__)
 QUOTA_CHECK_INTERVAL = timedelta(minutes=10)
+STALE_JOB_AGE = timedelta(minutes=10)
 
 
 class CandidateValidationError(Exception):
@@ -47,10 +49,34 @@ def _json_load(value: Optional[str]) -> dict:
         return {}
 
 
-def _extract_remaining_percent(payload: Any) -> Optional[float]:
+def _extract_quota_state(payload: Any) -> tuple[Optional[float], Optional[datetime]]:
     """Understand several historical Token Plan payload shapes conservatively."""
 
-    percentages: list[float] = []
+    measurements: list[tuple[float, Optional[datetime]]] = []
+
+    def reset_time(raw: Any) -> Optional[datetime]:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if value > 10_000_000_000:
+            value /= 1000
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc).replace(tzinfo=None)
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    def add_percent(raw: Any, reset: Any = None) -> None:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return
+        if 0 <= value <= 1:
+            value *= 100
+        measurements.append((
+            max(0.0, min(100.0, value)),
+            reset_time(reset),
+        ))
 
     def walk(value: Any) -> None:
         if isinstance(value, list):
@@ -60,18 +86,17 @@ def _extract_remaining_percent(payload: Any) -> Optional[float]:
         if not isinstance(value, dict):
             return
         lowered = {str(key).lower(): item for key, item in value.items()}
-        for key in (
-            "remaining_percent",
-            "remain_percent",
-            "remainingpercentage",
-            "remainpercentage",
-        ):
+        percent_keys = (
+            ("current_interval_remaining_percent", "end_time"),
+            ("current_weekly_remaining_percent", "weekly_end_time"),
+            ("remaining_percent", "reset_at"),
+            ("remain_percent", "reset_at"),
+            ("remainingpercentage", "reset_at"),
+            ("remainpercentage", "reset_at"),
+        )
+        for key, reset_key in percent_keys:
             if key in lowered:
-                try:
-                    raw = float(lowered[key])
-                    percentages.append(raw * 100 if 0 <= raw <= 1 else raw)
-                except (TypeError, ValueError):
-                    pass
+                add_percent(lowered[key], lowered.get(reset_key))
 
         pairs = (
             ("remaining", "total"),
@@ -85,7 +110,7 @@ def _extract_remaining_percent(payload: Any) -> Optional[float]:
                     remaining = float(lowered[remaining_key])
                     total = float(lowered[total_key])
                     if total > 0:
-                        percentages.append(remaining * 100 / total)
+                        add_percent(remaining * 100 / total, lowered.get("reset_at"))
                 except (TypeError, ValueError):
                     pass
 
@@ -100,16 +125,24 @@ def _extract_remaining_percent(payload: Any) -> Optional[float]:
                     used = float(lowered[used_key])
                     total = float(lowered[total_key])
                     if total > 0:
-                        percentages.append(max(0, total - used) * 100 / total)
+                        add_percent(
+                            max(0, total - used) * 100 / total,
+                            lowered.get("reset_at"),
+                        )
                 except (TypeError, ValueError):
                     pass
         for item in value.values():
             walk(item)
 
     walk(payload)
-    if not percentages:
-        return None
-    return round(max(0.0, min(100.0, min(percentages))), 2)
+    if not measurements:
+        return None, None
+    remaining, reset_at = min(measurements, key=lambda item: item[0])
+    return round(remaining, 2), reset_at
+
+
+def _extract_remaining_percent(payload: Any) -> Optional[float]:
+    return _extract_quota_state(payload)[0]
 
 
 def _store_media(
@@ -159,6 +192,21 @@ class AiJobProcessor:
         self.db.commit()
         return len(jobs)
 
+    def recover_stale(self) -> int:
+        cutoff = utc_now() - STALE_JOB_AGE
+        jobs = self.db.query(models.AiJob).filter(
+            models.AiJob.status == "running",
+            models.AiJob.updated_at < cutoff,
+        ).all()
+        for job in jobs:
+            job.status = "pending"
+            job.available_at = utc_now()
+            job.last_error_code = "stale_recovered"
+            job.last_error_message = "运行任务超过十分钟未完成，已自动恢复排队"
+            job.updated_at = utc_now()
+        self.db.commit()
+        return len(jobs)
+
     async def refresh_quota(self, *, force: bool = False) -> Optional[models.AiQuotaSnapshot]:
         latest = self.db.query(models.AiQuotaSnapshot).filter(
             models.AiQuotaSnapshot.provider == "minimax",
@@ -175,10 +223,12 @@ class AiJobProcessor:
             return None
         try:
             payload = await provider.get_quota()
+            remaining_percent, reset_at = _extract_quota_state(payload)
             snapshot = models.AiQuotaSnapshot(
                 provider="minimax",
-                remaining_percent=_extract_remaining_percent(payload),
+                remaining_percent=remaining_percent,
                 status="available",
+                reset_at=reset_at,
                 raw_payload=json.dumps(payload, ensure_ascii=False),
                 checked_at=utc_now(),
             )
@@ -272,6 +322,21 @@ class AiJobProcessor:
             job.last_error_message = str(exc)[:1000]
             self._mark_feedback_manual(job)
             self.db.commit()
+        except OperationalError as exc:
+            if "database is locked" not in str(exc).lower():
+                raise
+            self.db.rollback()
+            retry_job = self.db.query(models.AiJob).filter(
+                models.AiJob.id == job.id,
+            ).first()
+            if retry_job:
+                retry_job.status = "pending"
+                retry_job.attempts = max(0, retry_job.attempts - 1)
+                retry_job.available_at = utc_now() + timedelta(seconds=5)
+                retry_job.last_error_code = "database_busy"
+                retry_job.last_error_message = "SQLite 短暂繁忙，任务已自动重新排队"
+                retry_job.updated_at = utc_now()
+                self.db.commit()
         except Exception as exc:
             logger.exception("AI job %s failed", job.id)
             if job.attempts >= job.max_attempts:
@@ -776,29 +841,76 @@ class SilentAiWorker:
     def __init__(self, session_factory):
         self.session_factory = session_factory
         self._task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        self._heartbeat_at: Optional[datetime] = None
+        self._last_success_at: Optional[datetime] = None
+        self._last_error: Optional[str] = None
 
     def start(self) -> None:
         if self._task and not self._task.done():
             return
         self._stop.clear()
-        self._task = asyncio.create_task(self._run())
+        self._task = asyncio.create_task(self._supervise())
+        self._heartbeat_task = asyncio.create_task(self._heartbeat())
 
     async def stop(self) -> None:
         self._stop.set()
         if self._task:
             await self._task
             self._task = None
+        if self._heartbeat_task:
+            await self._heartbeat_task
+            self._heartbeat_task = None
 
-    async def _run(self) -> None:
+    async def _heartbeat(self) -> None:
+        while not self._stop.is_set():
+            self._heartbeat_at = utc_now()
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
+
+    async def _supervise(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self._consume()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._last_error = str(exc)[:1000]
+                logger.exception("Silent AI worker consumer stopped; restarting")
+            if not self._stop.is_set():
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+
+    async def _consume(self) -> None:
         with self.session_factory() as db:
             AiJobProcessor(db).recover_interrupted()
         while not self._stop.is_set():
             processed = False
             with self.session_factory() as db:
                 try:
-                    processed = await AiJobProcessor(db).process_next()
-                except Exception:
+                    processor = AiJobProcessor(db)
+                    processor.recover_stale()
+                    processed = await processor.process_next()
+                    if processed:
+                        self._last_success_at = utc_now()
+                        self._last_error = None
+                except OperationalError as exc:
+                    db.rollback()
+                    if "database is locked" in str(exc).lower():
+                        self._last_error = "SQLite 短暂繁忙，后台将在下一轮继续"
+                        try:
+                            AiJobProcessor(db).recover_interrupted()
+                        except OperationalError:
+                            db.rollback()
+                    else:
+                        raise
+                except Exception as exc:
+                    self._last_error = str(exc)[:1000]
                     logger.exception("Silent AI worker iteration failed")
                     db.rollback()
             delay = 0.25 if processed else 5
@@ -806,6 +918,15 @@ class SilentAiWorker:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
             except asyncio.TimeoutError:
                 pass
+
+    def status(self) -> dict:
+        alive = bool(self._task and not self._task.done())
+        return {
+            "alive": alive,
+            "heartbeat_at": self._heartbeat_at,
+            "last_success_at": self._last_success_at,
+            "last_error": self._last_error,
+        }
 
 
 _worker: Optional[SilentAiWorker] = None
@@ -823,3 +944,14 @@ async def stop_silent_worker() -> None:
     if _worker:
         await _worker.stop()
         _worker = None
+
+
+def silent_worker_status() -> dict:
+    if not _worker:
+        return {
+            "alive": False,
+            "heartbeat_at": None,
+            "last_success_at": None,
+            "last_error": "后台执行器尚未启动",
+        }
+    return _worker.status()

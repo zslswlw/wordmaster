@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from sqlalchemy import and_, case, exists, func, not_, or_
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -354,28 +355,80 @@ def prioritize_group_resources(db: Session, group: models.StudyGroup) -> None:
 
 
 def coverage_for_bank(db: Session, bank_id: int) -> dict:
-    words = db.query(models.Word).filter(models.Word.bank_id == bank_id).all()
-    visual_ready = 0
-    complete_ready = 0
-    resolver = LearningContentResolver(db)
-    for word in words:
-        content = resolver.resolve(word)
-        image_and_text = (
-            content["image_status"] == "ready"
-            and content["text_status"] == "ready"
-        )
-        if image_and_text:
-            visual_ready += 1
-        if image_and_text and content["audio_status"] == "ready":
-            complete_ready += 1
-    total = len(words)
+    """Return bank coverage with one aggregate query instead of resolving each word."""
+
+    has_active_bundle = models.MemoryBundle.id.isnot(None)
+    text_ready = or_(
+        and_(
+            has_active_bundle,
+            models.MemoryBundle.memory_anchor.isnot(None),
+            models.MemoryBundle.memory_anchor != "",
+        ),
+        and_(
+            not_(has_active_bundle),
+            models.Word.mnemonic.isnot(None),
+            models.Word.mnemonic != "",
+        ),
+    )
+    ready_image_asset = and_(
+        has_active_bundle,
+        exists().where(
+            and_(
+                models.MemoryAsset.bundle_id == models.WordMemoryLink.active_bundle_id,
+                models.MemoryAsset.asset_type == "image",
+                models.MemoryAsset.status == "ready",
+            )
+        ),
+    )
+    image_ready = or_(
+        ready_image_asset,
+        and_(
+            models.Word.image_url.isnot(None),
+            models.Word.image_url != "",
+        ),
+    )
+    audio_ready = and_(
+        has_active_bundle,
+        exists().where(
+            and_(
+                models.MemoryAsset.bundle_id == models.WordMemoryLink.active_bundle_id,
+                models.MemoryAsset.asset_type == "audio",
+                models.MemoryAsset.status == "ready",
+            )
+        ),
+    )
+    visual_ready = and_(text_ready, image_ready)
+    complete_ready = and_(visual_ready, audio_ready)
+    total, text_count, visual_count, complete_count = db.query(
+        func.count(models.Word.id),
+        func.coalesce(func.sum(case((text_ready, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((visual_ready, 1), else_=0)), 0),
+        func.coalesce(func.sum(case((complete_ready, 1), else_=0)), 0),
+    ).outerjoin(
+        models.WordMemoryLink,
+        models.WordMemoryLink.word_id == models.Word.id,
+    ).outerjoin(
+        models.MemoryBundle,
+        and_(
+            models.MemoryBundle.id == models.WordMemoryLink.active_bundle_id,
+            models.MemoryBundle.status == "active",
+        ),
+    ).filter(
+        models.Word.bank_id == bank_id,
+    ).one()
+    total = int(total or 0)
+    text_count = int(text_count or 0)
+    visual_count = int(visual_count or 0)
+    complete_count = int(complete_count or 0)
     return {
         "bank_id": bank_id,
         "total": total,
-        "visual_ready": visual_ready,
-        "complete_ready": complete_ready,
-        "visual_ready_percent": round(visual_ready * 100 / total, 1) if total else 0,
-        "complete_ready_percent": round(complete_ready * 100 / total, 1) if total else 0,
+        "text_ready": text_count,
+        "visual_ready": visual_count,
+        "complete_ready": complete_count,
+        "text_ready_percent": round(text_count * 100 / total, 1) if total else 0,
+        "visual_ready_percent": round(visual_count * 100 / total, 1) if total else 0,
+        "complete_ready_percent": round(complete_count * 100 / total, 1) if total else 0,
     }
 
 

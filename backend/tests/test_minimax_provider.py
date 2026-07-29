@@ -35,7 +35,7 @@ def test_minimax_tts_uses_t2a_v2_and_decodes_hex(monkeypatch):
     provider = MiniMaxProvider(ProviderConfig(
         api_key="test",
         api_base="https://api.minimaxi.com",
-        text_model="MiniMax-M2.7",
+        text_model="MiniMax-M3",
         image_model="image-01",
         speech_model="speech-2.8-turbo",
     ))
@@ -47,6 +47,38 @@ def test_minimax_tts_uses_t2a_v2_and_decodes_hex(monkeypatch):
     request_body = json.loads(captured["body"])
     assert request_body["output_format"] == "hex"
     assert request_body["language_boost"] == "Chinese"
+
+
+def test_minimax_chat_defaults_to_m3(monkeypatch):
+    from app.services.ai import minimax as minimax_module
+
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["body"] = json.loads(request.read().decode())
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "{}"}}],
+                "base_resp": {"status_code": 0, "status_msg": "success"},
+            },
+        )
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        minimax_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_client(transport=transport),
+    )
+    provider = MiniMaxProvider(ProviderConfig(
+        api_key="test",
+        api_base="https://api.minimaxi.com",
+        text_model="",
+    ))
+
+    assert asyncio.run(provider.chat([{"role": "user", "content": "test"}])) == "{}"
+    assert captured["body"]["model"] == "MiniMax-M3"
 
 
 def test_minimax_error_codes_have_distinct_retry_policy():

@@ -6,10 +6,10 @@ def test_api_key_is_encrypted_and_blank_update_preserves_it(api):
     payload = {
         "provider": "minimax",
         "api_key": "secret-minimax-key",
-        "api_base": "https://api.minimaxi.com",
-        "text_model": "MiniMax-M2.7",
-        "image_model": "image-01",
-        "speech_model": "speech-2.8-turbo",
+        "api_base": "https://api.minimax.chat",
+        "text_model": "minimax-m2.7",
+        "image_model": "",
+        "speech_model": "speech-02",
         "is_enabled": True,
     }
     created = api["client"].post(
@@ -25,6 +25,10 @@ def test_api_key_is_encrypted_and_blank_update_preserves_it(api):
     assert encrypted.startswith("enc:v1:")
     assert "secret-minimax-key" not in encrypted
     assert decrypt_secret(encrypted) == "secret-minimax-key"
+    assert config.api_base == "https://api.minimaxi.com"
+    assert config.text_model == "MiniMax-M3"
+    assert config.image_model == "image-01"
+    assert config.speech_model == "speech-2.8-turbo"
     session.close()
 
     listed = api["client"].get(

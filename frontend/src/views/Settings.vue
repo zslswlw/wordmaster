@@ -45,7 +45,7 @@
             <el-input v-model="minimaxForm.api_base" placeholder="https://api.minimaxi.com" />
           </el-form-item>
           <el-form-item label="文本模型">
-            <el-input v-model="minimaxForm.text_model" placeholder="MiniMax-M2.7" />
+            <el-input v-model="minimaxForm.text_model" placeholder="MiniMax-M3" />
           </el-form-item>
           <el-form-item label="生图模型">
             <el-input v-model="minimaxForm.image_model" placeholder="image-01" />
@@ -113,22 +113,23 @@
         </div>
         <div class="worker-stat">
           <span>MiniMax 剩余</span>
-          <strong>{{ quota.remaining_percent == null ? '待检查' : `${quota.remaining_percent}%` }}</strong>
+          <strong>{{ quotaText() }}</strong>
         </div>
         <div class="worker-stat">
-          <span>处理中 / 等待</span>
-          <strong>{{ jobs.running || 0 }} / {{ jobs.pending || 0 }}</strong>
+          <span>当前请求 / 后台步骤</span>
+          <strong>{{ jobCountsText() }}</strong>
         </div>
         <div class="worker-stat">
           <span>当前任务</span>
           <strong>{{ currentJobText() }}</strong>
         </div>
-        <el-button :type="worker.paused ? 'primary' : 'default'" @click="toggleWorker">
+        <el-button :type="worker.paused ? 'primary' : 'default'" :disabled="!dashboardLoaded" @click="toggleWorker">
           {{ worker.paused ? '恢复' : '暂停' }}
         </el-button>
       </div>
       <div class="worker-meta">
-        <span>最近活动：{{ lastActivityText() }}</span>
+        <span>{{ dashboardError || `状态时间：${snapshotText()}` }}</span>
+        <span>最近任务：{{ lastActivityText() }}</span>
         <span v-if="jobs.failed">失败待检查：{{ jobs.failed }}</span>
       </div>
       <div class="reserve-row">
@@ -146,13 +147,19 @@
           <p class="section-desc">图文就绪包含记忆点与图片，完整就绪再包含中文播报。</p>
         </div>
       </div>
-      <div v-if="banks.length === 0" class="empty">暂无词库</div>
+      <div v-if="!dashboardLoaded" class="empty">{{ dashboardError || '正在加载后台状态' }}</div>
+      <div v-else-if="banks.length === 0" class="empty">暂无词库</div>
       <div v-for="bank in banks" :key="bank.id" class="bank-row">
         <div class="bank-info">
           <span class="bank-name">{{ bank.name }}</span>
           <span class="bank-count">{{ bank.word_count }} 词</span>
         </div>
         <div class="bank-status">
+          <div class="status-line">
+            <span class="status-label">文字</span>
+            <el-progress :percentage="coverage[bank.id]?.text_ready_percent || 0" :stroke-width="4" :show-text="false" style="width:100px" />
+            <span class="status-text">{{ coverage[bank.id]?.text_ready || 0 }}/{{ coverage[bank.id]?.total || bank.word_count }}</span>
+          </div>
           <div class="status-line">
             <span class="status-label">图文</span>
             <el-progress :percentage="coverage[bank.id]?.visual_ready_percent || 0" :stroke-width="4" :show-text="false" style="width:100px" />
@@ -169,7 +176,7 @@
           size="small"
           text
           :loading="reprocessingBank[bank.id] || bankIsProcessing(bank.id)"
-          :disabled="bankIsProcessing(bank.id)"
+          :disabled="!dashboardLoaded || bankIsProcessing(bank.id)"
           @click="reprocessBank(bank.id)"
         >
           {{ bankActionText(bank.id) }}
@@ -239,15 +246,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onActivated, onBeforeUnmount } from 'vue'
+import { ref, reactive, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { settingsAPI, aiAPI, bankAPI } from '../api'
+import { settingsAPI, aiAPI } from '../api'
 import { useAuth } from '../composables/useAuth'
 
 // --- Provider 表单 ---
 const deepseekForm = reactive({ provider: 'deepseek', api_key: '', api_base: 'https://api.deepseek.com', text_model: 'deepseek-chat', image_model: '', speech_model: '', is_enabled: true })
-const minimaxForm = reactive({ provider: 'minimax', api_key: '', api_base: 'https://api.minimaxi.com', text_model: 'MiniMax-M2.7', image_model: 'image-01', speech_model: 'speech-2.8-turbo', is_enabled: true })
+const minimaxForm = reactive({ provider: 'minimax', api_key: '', api_base: 'https://api.minimaxi.com', text_model: 'MiniMax-M3', image_model: 'image-01', speech_model: 'speech-2.8-turbo', is_enabled: true })
 const savedKeys = reactive({ deepseek: false, minimax: false })
 
 const savingDeepseek = ref(false)
@@ -278,13 +285,20 @@ const quota = reactive<{ remaining_percent: number | null; status: string }>({ r
 const jobs = reactive<Record<string, number>>({})
 const worker = reactive({
   paused: false,
-  state: 'idle',
+  state: 'loading',
   quota_reserve_percent: 30,
   feedback_reserve_percent: 20,
   priority_bank_id: null as number | null,
   queue: null as any,
+  runtime: null as any,
 })
-let pollTimer: ReturnType<typeof setInterval> | null = null
+const dashboardLoaded = ref(false)
+const dashboardError = ref('')
+const observedAt = ref<string | null>(null)
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+let pollInFlight = false
+let viewActive = false
+let mounted = false
 
 const jobKindText: Record<string, string> = {
   bundle_text: '整理记忆方案',
@@ -295,19 +309,40 @@ const jobKindText: Record<string, string> = {
 }
 
 const workerStateText = () => {
+  if (!dashboardLoaded.value) return '加载中'
   if (worker.paused) return '已暂停'
-  if (worker.state === 'running') return '正在处理'
-  if (worker.state === 'queued') return '等待资源'
+  if (worker.state === 'running') return '正在生成'
+  if (worker.state === 'queued') return '等待调度'
+  if (worker.state === 'waiting_quota') return '等待额度'
+  if (worker.state === 'waiting_rate_limit') return '限流退避'
+  if (worker.state === 'stalled') return '执行器失联'
   if (worker.state === 'attention') return '需要检查'
   return '空闲'
 }
 
+const quotaText = () => {
+  if (!dashboardLoaded.value) return '加载中'
+  return quota.remaining_percent == null ? '无法解析' : `${quota.remaining_percent}%`
+}
+
+const jobCountsText = () => {
+  if (!dashboardLoaded.value) return '- / -'
+  return `${jobs.running || 0} / ${jobs.pending || 0}`
+}
+
 const currentJobText = () => {
+  if (!dashboardLoaded.value) return '加载中'
   const current = worker.queue?.current_job
   if (current) return jobKindText[current.kind] || current.kind
   const next = worker.queue?.next_job
   if (next) return `等待：${jobKindText[next.kind] || next.kind}`
   return '无'
+}
+
+const snapshotText = () => {
+  if (!observedAt.value) return '暂无'
+  const parsed = new Date(observedAt.value)
+  return Number.isNaN(parsed.getTime()) ? '暂无' : parsed.toLocaleString('zh-CN')
 }
 
 const lastActivityText = () => {
@@ -322,37 +357,61 @@ const bankIsProcessing = (bankId: number) =>
 
 const bankActionText = (bankId: number) => {
   const queue = coverage[bankId]?.queue
+  if (queue?.active_jobs && worker.state === 'waiting_quota') return '等待额度'
+  if (queue?.active_jobs && worker.state === 'waiting_rate_limit') return '限流等待'
+  if (queue?.active_jobs && worker.state === 'stalled') return '执行器失联'
   if (queue?.state === 'running') return `处理中 (${queue.active_jobs})`
   if (queue?.state === 'queued') return `排队中 (${queue.active_jobs})`
   if (queue?.state === 'attention') return '重试'
   return '补全'
 }
 
-const loadBankStatuses = async () => {
+const loadFeedback = async () => {
   try {
-    const { data } = await bankAPI.getAll()
-    banks.value = data
-    await Promise.all(data.map(async (bank: any) => {
-      try {
-        const { data: state } = await aiAPI.bankCoverage(bank.id)
-        coverage[bank.id] = state
-      } catch { /* keep prior state */ }
-    }))
-    const [{ data: quotaData }, { data: jobData }, { data: workerData }, { data: feedbackData }] = await Promise.all([
-      aiAPI.quota(),
-      aiAPI.jobs(),
-      aiAPI.worker(),
-      aiAPI.feedback(),
-    ])
-    Object.assign(quota, quotaData)
-    Object.keys(jobs).forEach(key => delete jobs[key])
-    Object.assign(jobs, jobData.counts || {})
-    Object.assign(worker, workerData)
-    feedbackItems.value = (feedbackData || []).filter(
+    const { data } = await aiAPI.feedback()
+    feedbackItems.value = (data || []).filter(
       (item: any) => ['pending', 'generating', 'manual_review'].includes(item.status),
     )
+  } catch { /* dashboard remains usable when feedback loading fails */ }
+}
+
+const scheduleDashboardPoll = () => {
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = null
+  if (!viewActive) return
+  const activeStates = new Set([
+    'running',
+    'queued',
+    'waiting_quota',
+    'waiting_rate_limit',
+    'stalled',
+  ])
+  const delay = activeStates.has(worker.state) ? 5000 : 15000
+  pollTimer = setTimeout(loadDashboard, delay)
+}
+
+const loadDashboard = async () => {
+  if (pollInFlight) return
+  pollInFlight = true
+  try {
+    const { data } = await aiAPI.dashboard()
+    banks.value = data.banks || []
+    for (const bank of banks.value) coverage[bank.id] = bank
+    Object.assign(quota, data.quota || {})
+    Object.keys(jobs).forEach(key => delete jobs[key])
+    Object.assign(jobs, data.jobs || {})
+    Object.assign(worker, data.worker || {})
+    observedAt.value = data.observed_at || null
+    dashboardLoaded.value = true
+    dashboardError.value = ''
+    void loadFeedback()
     if (showVersions.value) await loadVersions()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    dashboardError.value = e.response?.data?.detail || '后台状态更新失败，继续显示上次数据'
+  } finally {
+    pollInFlight = false
+    scheduleDashboardPoll()
+  }
 }
 
 const reprocessBank = async (bankId: number) => {
@@ -360,7 +419,7 @@ const reprocessBank = async (bankId: number) => {
   try {
     await aiAPI.seedBank(bankId)
     ElMessage.success('缺失资源已加入后台队列')
-    await loadBankStatuses()
+    await loadDashboard()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '启动失败')
   } finally {
@@ -376,6 +435,7 @@ const saveWorker = async () => {
       priority_bank_id: worker.priority_bank_id,
     })
     Object.assign(worker, data)
+    await loadDashboard()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '调度设置保存失败')
   }
@@ -385,6 +445,7 @@ const toggleWorker = async () => {
   try {
     const { data } = await aiAPI.updateWorker({ paused: !worker.paused })
     Object.assign(worker, data)
+    await loadDashboard()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '状态更新失败')
   }
@@ -463,7 +524,7 @@ const activateVersion = async (bundleId: number) => {
   try {
     await aiAPI.activateBundle(selectedFeedback.value.word_id, bundleId)
     ElMessage.success('版本已启用')
-    await Promise.all([loadVersions(), loadBankStatuses()])
+    await Promise.all([loadVersions(), loadDashboard()])
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '版本尚未就绪')
   }
@@ -488,16 +549,24 @@ onMounted(async () => {
     }
   } catch { /* ignore */ }
 
-  await loadBankStatuses()
-  pollTimer = setInterval(loadBankStatuses, 5000)
+  mounted = true
+  viewActive = true
+  await loadDashboard()
 })
 
 onActivated(() => {
-  loadBankStatuses()
+  viewActive = true
+  if (mounted) void loadDashboard()
+})
+
+onDeactivated(() => {
+  viewActive = false
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
 })
 
 onBeforeUnmount(() => {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  viewActive = false
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
 })
 
 // --- 保存配置 ---
