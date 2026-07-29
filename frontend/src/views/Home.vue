@@ -12,6 +12,7 @@
           <el-menu-item index="/review"><el-icon><Calendar /></el-icon><span>复习计划</span></el-menu-item>
           <el-menu-item v-if="isAdmin" index="/backup"><el-icon><Download /></el-icon><span>数据备份</span></el-menu-item>
           <el-menu-item v-if="isAdmin" index="/admin"><el-icon><Setting /></el-icon><span>管理</span></el-menu-item>
+          <el-menu-item v-if="testMode" index="/test-lab"><el-icon><Clock /></el-icon><span>时间实验室</span></el-menu-item>
         </el-menu>
 
         <div class="sb-footer">
@@ -39,6 +40,7 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item disabled>{{ username }}</el-dropdown-item>
+                  <el-dropdown-item v-if="testMode" command="test-lab">时间实验室</el-dropdown-item>
                   <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -64,10 +66,10 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { authAPI } from '../api'
+import { authAPI, systemAPI } from '../api'
 import { useResponsive } from '../composables/useResponsive'
 import { useAuth } from '../composables/useAuth'
-import { HomeFilled, FolderOpened, Calendar, Download, UserFilled, Setting } from '@element-plus/icons-vue'
+import { HomeFilled, FolderOpened, Calendar, Download, UserFilled, Setting, Clock } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -75,6 +77,7 @@ const { isDesktop, deviceType, orientation } = useResponsive()
 const { isAdmin, setRole, clearAuth } = useAuth()
 const username = ref('')
 const activeMenu = ref('/dashboard')
+const testMode = ref(false)
 
 const currentRoute = computed(() => route)
 
@@ -84,11 +87,16 @@ const updateActiveMenu = () => {
   else if (path.startsWith('/groups')) activeMenu.value = '/groups'
   else if (path.startsWith('/review') || path.startsWith('/study-review')) activeMenu.value = '/review'
   else if (path.startsWith('/backup')) activeMenu.value = '/backup'
+  else if (path.startsWith('/test-lab')) activeMenu.value = '/test-lab'
   else if (path.startsWith('/study')) activeMenu.value = '/groups'
   else activeMenu.value = '/dashboard'
 }
 
 onMounted(async () => {
+  try {
+    const { data } = await systemAPI.health()
+    testMode.value = data.test_mode === true
+  } catch { testMode.value = false }
   try {
     const { data } = await authAPI.me()
     username.value = data.username
@@ -100,7 +108,10 @@ onMounted(async () => {
 watch(() => route.path, updateActiveMenu)
 
 const handleMenuSelect = (index: string) => router.push(index)
-const handleCommand = (cmd: string) => { if (cmd === 'logout') handleLogout() }
+const handleCommand = (cmd: string) => {
+  if (cmd === 'logout') handleLogout()
+  else if (cmd === 'test-lab') router.push('/test-lab')
+}
 
 const handleLogout = () => {
   clearAuth()

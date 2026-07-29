@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <h2>AI 模型配置</h2>
-    <p class="subtitle">配置 DeepSeek 和 MiniMax API，启用 AI 增强学习功能</p>
+    <p class="subtitle">MiniMax 负责文字、图像和中文播报，DeepSeek 仅在文字服务不可用时备用</p>
 
     <!-- Provider 配置卡片 -->
     <div class="provider-cards">
@@ -9,11 +9,11 @@
       <div class="config-card">
         <div class="card-header">
           <h3>DeepSeek</h3>
-          <span class="badge">文本推理 · 视觉理解</span>
+          <span class="badge">备用文字</span>
         </div>
         <el-form :model="deepseekForm" label-position="top" size="default">
           <el-form-item label="API Key">
-            <el-input v-model="deepseekForm.api_key" type="password" show-password placeholder="sk-..." />
+            <el-input v-model="deepseekForm.api_key" type="password" show-password :placeholder="savedKeys.deepseek ? '已保存，留空表示不修改' : 'sk-...'" />
           </el-form-item>
           <el-form-item label="Endpoint">
             <el-input v-model="deepseekForm.api_base" placeholder="https://api.deepseek.com" />
@@ -35,23 +35,23 @@
       <div class="config-card">
         <div class="card-header">
           <h3>MiniMax</h3>
-          <span class="badge">生图 · TTS</span>
+          <span class="badge">文字 · 生图 · 播报</span>
         </div>
         <el-form :model="minimaxForm" label-position="top" size="default">
           <el-form-item label="API Key">
-            <el-input v-model="minimaxForm.api_key" type="password" show-password placeholder="eyJ..." />
+            <el-input v-model="minimaxForm.api_key" type="password" show-password :placeholder="savedKeys.minimax ? '已保存，留空表示不修改' : 'eyJ...'" />
           </el-form-item>
           <el-form-item label="Endpoint">
-            <el-input v-model="minimaxForm.api_base" placeholder="https://api.minimax.chat" />
+            <el-input v-model="minimaxForm.api_base" placeholder="https://api.minimaxi.com" />
           </el-form-item>
           <el-form-item label="文本模型">
-            <el-input v-model="minimaxForm.text_model" placeholder="minimax-m2.7" />
+            <el-input v-model="minimaxForm.text_model" placeholder="MiniMax-M2.7" />
           </el-form-item>
           <el-form-item label="生图模型">
             <el-input v-model="minimaxForm.image_model" placeholder="image-01" />
           </el-form-item>
           <el-form-item label="语音模型">
-            <el-input v-model="minimaxForm.speech_model" placeholder="speech-02" />
+            <el-input v-model="minimaxForm.speech_model" placeholder="speech-2.8-turbo" />
           </el-form-item>
         </el-form>
         <div class="card-actions">
@@ -82,7 +82,7 @@
         <div class="toggle-item">
           <div class="toggle-info">
             <span class="toggle-label">记忆锚点</span>
-            <span class="toggle-desc">DeepSeek 生成中文谐音/场景联想，辅助快速编码</span>
+            <span class="toggle-desc">优先使用直接语义或自然场景，不强行编造谐音和词源</span>
           </div>
           <el-switch v-model="flags.mnemonic_enabled" @change="saveFlags" />
         </div>
@@ -103,12 +103,39 @@
       </div>
     </div>
 
-    <!-- 预处理状态 -->
+    <div class="section">
+      <h3>静默资源调度</h3>
+      <p class="section-desc">学习不等待生成任务；额度达到保留线后后台会自动暂停普通补全。</p>
+      <div class="worker-panel">
+        <div class="worker-stat">
+          <span>运行状态</span>
+          <strong>{{ worker.paused ? '已暂停' : '运行中' }}</strong>
+        </div>
+        <div class="worker-stat">
+          <span>MiniMax 剩余</span>
+          <strong>{{ quota.remaining_percent == null ? '待检查' : `${quota.remaining_percent}%` }}</strong>
+        </div>
+        <div class="worker-stat">
+          <span>待处理任务</span>
+          <strong>{{ jobs.pending || 0 }}</strong>
+        </div>
+        <el-button :type="worker.paused ? 'primary' : 'default'" @click="toggleWorker">
+          {{ worker.paused ? '恢复' : '暂停' }}
+        </el-button>
+      </div>
+      <div class="reserve-row">
+        <span>普通任务保留额度</span>
+        <el-input-number v-model="worker.quota_reserve_percent" :min="0" :max="95" :step="5" @change="saveWorker" />
+        <span>反馈任务保留额度</span>
+        <el-input-number v-model="worker.feedback_reserve_percent" :min="0" :max="95" :step="5" @change="saveWorker" />
+      </div>
+    </div>
+
     <div class="section">
       <div class="preprocess-header">
         <div>
-          <h3>预处理状态</h3>
-          <p class="section-desc">词库导入后自动处理，无需手动操作</p>
+          <h3>词库进化进度</h3>
+          <p class="section-desc">图文就绪包含记忆点与图片，完整就绪再包含中文播报。</p>
         </div>
       </div>
       <div v-if="banks.length === 0" class="empty">暂无词库</div>
@@ -118,49 +145,79 @@
           <span class="bank-count">{{ bank.word_count }} 词</span>
         </div>
         <div class="bank-status">
-          <div v-if="pipelineStates[bank.id]?.rate_limit" class="rate-limit-banner">
-            ⏸ 限流暂停中 — {{ stageLabel(pipelineStates[bank.id].rate_limit.stage) }} 等待 {{ pipelineStates[bank.id].rate_limit.wait_seconds }}s
+          <div class="status-line">
+            <span class="status-label">图文</span>
+            <el-progress :percentage="coverage[bank.id]?.visual_ready_percent || 0" :stroke-width="4" :show-text="false" style="width:100px" />
+            <span class="status-text">{{ coverage[bank.id]?.visual_ready || 0 }}/{{ coverage[bank.id]?.total || bank.word_count }}</span>
           </div>
           <div class="status-line">
-            <span class="status-label">文本</span>
-            <template v-if="enrichStatus[bank.id]?.status === 'running'">
-              <el-progress :percentage="Math.round(((enrichStatus[bank.id].progress || 0) / (enrichStatus[bank.id].total || 1)) * 100) || 0" :stroke-width="4" :show-text="false" style="width:80px" />
-              <span class="status-text">{{ enrichStatus[bank.id].progress }}/{{ enrichStatus[bank.id].total }}</span>
-            </template>
-            <template v-else-if="enrichStatus[bank.id]?.total > 0">
-              <el-progress :percentage="Math.round(((enrichStatus[bank.id].success || 0) / (enrichStatus[bank.id].total || 1)) * 100) || 0" :stroke-width="4" :show-text="false" style="width:80px" />
-              <span class="status-text">{{ enrichStatus[bank.id].success || 0 }}/{{ enrichStatus[bank.id].total }}</span>
-            </template>
-            <span v-else class="status-text text-muted">未开始</span>
-          </div>
-          <div class="status-line">
-            <span class="status-label">图片</span>
-            <template v-if="imageStatus[bank.id]?.status === 'running'">
-              <el-progress :percentage="Math.round(((imageStatus[bank.id].progress || 0) / (imageStatus[bank.id].total || 1)) * 100) || 0" :stroke-width="4" :show-text="false" style="width:80px" />
-              <span class="status-text">{{ imageStatus[bank.id].progress }}/{{ imageStatus[bank.id].total }}</span>
-            </template>
-            <template v-else-if="imageStatus[bank.id]?.total > 0">
-              <el-progress :percentage="Math.round(((imageStatus[bank.id].success || 0) / (imageStatus[bank.id].total || 1)) * 100) || 0" :stroke-width="4" :show-text="false" style="width:80px" />
-              <span class="status-text">{{ imageStatus[bank.id].success || 0 }}/{{ imageStatus[bank.id].total }}</span>
-            </template>
-            <span v-else class="status-text text-muted">未生成</span>
-          </div>
-          <div class="status-line">
-            <span class="status-label">语境</span>
-            <template v-if="contextAudioStatus[bank.id]?.status === 'running'">
-              <el-progress :percentage="Math.round(((contextAudioStatus[bank.id].progress || 0) / (contextAudioStatus[bank.id].total || 1)) * 100) || 0" :stroke-width="4" :show-text="false" style="width:80px" />
-              <span class="status-text">{{ contextAudioStatus[bank.id].progress }}/{{ contextAudioStatus[bank.id].total }}</span>
-            </template>
-            <template v-else-if="contextAudioStatus[bank.id]?.total > 0">
-              <el-progress :percentage="Math.round(((contextAudioStatus[bank.id].success || 0) / (contextAudioStatus[bank.id].total || 1)) * 100) || 0" :stroke-width="4" :show-text="false" style="width:80px" />
-              <span class="status-text">{{ contextAudioStatus[bank.id].success || 0 }}/{{ contextAudioStatus[bank.id].total }}</span>
-            </template>
-            <span v-else class="status-text text-muted">未生成</span>
+            <span class="status-label">完整</span>
+            <el-progress :percentage="coverage[bank.id]?.complete_ready_percent || 0" :stroke-width="4" :show-text="false" style="width:100px" />
+            <span class="status-text">{{ coverage[bank.id]?.complete_ready || 0 }}/{{ coverage[bank.id]?.total || bank.word_count }}</span>
           </div>
         </div>
-        <el-button v-if="isAdmin" size="small" text :loading="reprocessingBank[bank.id]" @click="reprocessBank(bank.id)">重新处理</el-button>
+        <el-button v-if="isAdmin" size="small" text :loading="reprocessingBank[bank.id]" @click="reprocessBank(bank.id)">补全</el-button>
       </div>
     </div>
+
+    <div class="section">
+      <h3>素材反馈</h3>
+      <p class="section-desc">待更新和人工检查的素材会保留当前版本，直到替代版确认启用。</p>
+      <div v-if="feedbackItems.length === 0" class="empty">暂无待处理反馈</div>
+      <div v-for="item in feedbackItems" :key="item.id" class="feedback-row">
+        <div class="feedback-copy">
+          <strong>{{ item.word }}</strong>
+          <span>{{ item.component === 'image' ? '图片' : '记忆点' }} · {{ item.reason }}</span>
+          <small v-if="item.detail">{{ item.detail }}</small>
+        </div>
+        <el-tag size="small" :type="item.status === 'manual_review' ? 'warning' : 'info'">
+          {{ item.status === 'manual_review' ? '人工检查' : item.status === 'generating' ? '生成中' : '待更新' }}
+        </el-tag>
+        <el-button size="small" @click="openVersions(item)">查看版本</el-button>
+      </div>
+    </div>
+
+    <el-dialog v-model="showVersions" :title="selectedFeedback ? `${selectedFeedback.word} · 记忆版本` : '记忆版本'" :width="isMobile ? '94%' : '720px'">
+      <div v-loading="versionsLoading" class="version-list">
+        <div v-for="version in versions" :key="version.id" class="version-row">
+          <div class="version-media">
+            <img v-if="versionImage(version)" :src="versionImage(version)" :alt="selectedFeedback?.word || ''" />
+            <div v-else class="version-placeholder">图片生成中</div>
+          </div>
+          <div class="version-copy">
+            <div class="version-title">
+              <strong>版本 {{ version.version }}</strong>
+              <el-tag v-if="version.id === activeBundleId" size="small" type="success">当前启用</el-tag>
+              <el-tag v-else size="small">{{ version.status }}</el-tag>
+            </div>
+            <p>{{ version.memory_anchor || '暂无记忆点' }}</p>
+            <small>{{ version.narration_text }}</small>
+            <div class="version-actions">
+              <el-button size="small" @click="beginEdit(version)">编辑为新版本</el-button>
+              <el-button v-if="version.id !== activeBundleId" size="small" type="primary" :disabled="!versionReady(version)" @click="activateVersion(version.id)">
+                {{ version.status === 'archived' ? '回滚到此版本' : '启用' }}
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <el-form v-if="editingBundleId" label-position="top" class="version-editor">
+        <el-form-item label="中文记忆点">
+          <el-input v-model="bundleEdit.memory_anchor" maxlength="45" show-word-limit />
+        </el-form-item>
+        <el-form-item label="图片提示词">
+          <el-input v-model="bundleEdit.image_prompt" type="textarea" :rows="3" />
+        </el-form-item>
+        <el-form-item label="中文播报脚本">
+          <el-input v-model="bundleEdit.narration_text" maxlength="64" show-word-limit />
+        </el-form-item>
+        <div class="editor-actions">
+          <el-button @click="editingBundleId = null">取消</el-button>
+          <el-button type="primary" :loading="savingBundle" @click="saveBundleEdit">生成草稿</el-button>
+        </div>
+      </el-form>
+    </el-dialog>
   </div>
 </template>
 
@@ -173,7 +230,8 @@ import { useAuth } from '../composables/useAuth'
 
 // --- Provider 表单 ---
 const deepseekForm = reactive({ provider: 'deepseek', api_key: '', api_base: 'https://api.deepseek.com', text_model: 'deepseek-chat', image_model: '', speech_model: '', is_enabled: true })
-const minimaxForm = reactive({ provider: 'minimax', api_key: '', api_base: 'https://api.minimax.chat', text_model: 'minimax-m2.7', image_model: 'image-01', speech_model: 'speech-02', is_enabled: true })
+const minimaxForm = reactive({ provider: 'minimax', api_key: '', api_base: 'https://api.minimaxi.com', text_model: 'MiniMax-M2.7', image_model: 'image-01', speech_model: 'speech-2.8-turbo', is_enabled: true })
+const savedKeys = reactive({ deepseek: false, minimax: false })
 
 const savingDeepseek = ref(false)
 const savingMinimax = ref(false)
@@ -197,54 +255,50 @@ const saveFlags = async () => {
 
 // --- 预处理 ---
 const banks = ref<any[]>([])
-const enrichStatus = reactive<Record<number, any>>({})
-const imageStatus = reactive<Record<number, any>>({})
-const contextAudioStatus = reactive<Record<number, any>>({})
-const pipelineStates = reactive<Record<number, any>>({})
+const coverage = reactive<Record<number, any>>({})
 const reprocessingBank = reactive<Record<number, boolean>>({})
+const quota = reactive<{ remaining_percent: number | null; status: string }>({ remaining_percent: null, status: 'unknown' })
+const jobs = reactive<Record<string, number>>({})
+const worker = reactive({
+  paused: false,
+  quota_reserve_percent: 30,
+  feedback_reserve_percent: 20,
+  priority_bank_id: null as number | null,
+})
 let pollTimer: ReturnType<typeof setInterval> | null = null
-
-const stageLabel = (s: string) => s === 'enrich' ? '文本增强' : s === 'images' ? '图片生成' : s === 'audio' ? '语境发音' : s
 
 const loadBankStatuses = async () => {
   try {
     const { data } = await bankAPI.getAll()
-    for (const bank of data) {
-      try {
-        const { data: s } = await aiAPI.bankPipelineStatus(bank.id)
-        pipelineStates[bank.id] = s
-        const e = s.enrich || {}
-        enrichStatus[bank.id] = {
-          total: e.total || 0,
-          success: e.success || 0,
-          status: s.status === 'enrich' ? 'running' : 'done',
-          progress: s.status === 'enrich' ? (s.progress || 0) : (e.success || 0),
-        }
-        const im = s.images || {}
-        imageStatus[bank.id] = {
-          total: im.total || 0,
-          success: im.success || 0,
-          status: s.status === 'images' ? 'running' : (im.status || 'done'),
-          progress: s.status === 'images' ? (s.progress || 0) : (im.success || 0),
-        }
-        const au = s.audio || {}
-        contextAudioStatus[bank.id] = {
-          total: au.total || 0,
-          success: au.success || 0,
-          status: s.status === 'audio' ? 'running' : (au.status || 'done'),
-          progress: s.status === 'audio' ? (s.progress || 0) : (au.success || 0),
-        }
-      } catch { /* ignore */ }
-    }
     banks.value = data
+    await Promise.all(data.map(async (bank: any) => {
+      try {
+        const { data: state } = await aiAPI.bankCoverage(bank.id)
+        coverage[bank.id] = state
+      } catch { /* keep prior state */ }
+    }))
+    const [{ data: quotaData }, { data: jobData }, { data: workerData }, { data: feedbackData }] = await Promise.all([
+      aiAPI.quota(),
+      aiAPI.jobs(),
+      aiAPI.worker(),
+      aiAPI.feedback(),
+    ])
+    Object.assign(quota, quotaData)
+    Object.keys(jobs).forEach(key => delete jobs[key])
+    Object.assign(jobs, jobData.counts || {})
+    Object.assign(worker, workerData)
+    feedbackItems.value = (feedbackData || []).filter(
+      (item: any) => ['pending', 'generating', 'manual_review'].includes(item.status),
+    )
+    if (showVersions.value) await loadVersions()
   } catch { /* ignore */ }
 }
 
 const reprocessBank = async (bankId: number) => {
   reprocessingBank[bankId] = true
   try {
-    await aiAPI.reprocessBank(bankId)
-    ElMessage.success('预处理已重新启动')
+    await aiAPI.seedBank(bankId)
+    ElMessage.success('缺失资源已加入后台队列')
     await loadBankStatuses()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '启动失败')
@@ -253,8 +307,106 @@ const reprocessBank = async (bankId: number) => {
   }
 }
 
+const saveWorker = async () => {
+  try {
+    const { data } = await aiAPI.updateWorker({
+      quota_reserve_percent: worker.quota_reserve_percent,
+      feedback_reserve_percent: worker.feedback_reserve_percent,
+      priority_bank_id: worker.priority_bank_id,
+    })
+    Object.assign(worker, data)
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '调度设置保存失败')
+  }
+}
+
+const toggleWorker = async () => {
+  try {
+    const { data } = await aiAPI.updateWorker({ paused: !worker.paused })
+    Object.assign(worker, data)
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '状态更新失败')
+  }
+}
+
 const router = useRouter()
 const { isAdmin } = useAuth()
+const isMobile = ref(window.innerWidth <= 640)
+const feedbackItems = ref<any[]>([])
+const showVersions = ref(false)
+const selectedFeedback = ref<any | null>(null)
+const versions = ref<any[]>([])
+const activeBundleId = ref<number | null>(null)
+const versionsLoading = ref(false)
+const editingBundleId = ref<number | null>(null)
+const savingBundle = ref(false)
+const bundleEdit = reactive({ memory_anchor: '', image_prompt: '', narration_text: '' })
+
+const loadVersions = async () => {
+  if (!selectedFeedback.value) return
+  versionsLoading.value = true
+  try {
+    const { data } = await aiAPI.wordVersions(selectedFeedback.value.word_id)
+    versions.value = data.items || []
+    activeBundleId.value = data.active_bundle_id
+  } catch {
+    ElMessage.error('版本加载失败')
+  } finally {
+    versionsLoading.value = false
+  }
+}
+
+const openVersions = async (item: any) => {
+  selectedFeedback.value = item
+  editingBundleId.value = null
+  showVersions.value = true
+  await loadVersions()
+}
+
+const versionImage = (version: any) =>
+  version.assets?.find((asset: any) => asset.type === 'image' && asset.status === 'ready')?.url || ''
+
+const versionReady = (version: any) => {
+  const ready = new Set(
+    (version.assets || [])
+      .filter((asset: any) => asset.status === 'ready')
+      .map((asset: any) => asset.type),
+  )
+  return ready.has('image') && ready.has('audio')
+}
+
+const beginEdit = (version: any) => {
+  editingBundleId.value = version.id
+  bundleEdit.memory_anchor = version.memory_anchor || ''
+  bundleEdit.image_prompt = version.image_prompt || ''
+  bundleEdit.narration_text = version.narration_text || ''
+}
+
+const saveBundleEdit = async () => {
+  if (!editingBundleId.value) return
+  savingBundle.value = true
+  try {
+    await aiAPI.editBundle(editingBundleId.value, { ...bundleEdit })
+    editingBundleId.value = null
+    ElMessage.success('草稿已创建，变更素材会在后台生成')
+    await loadVersions()
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '草稿创建失败')
+  } finally {
+    savingBundle.value = false
+  }
+}
+
+const activateVersion = async (bundleId: number) => {
+  if (!selectedFeedback.value) return
+  try {
+    await aiAPI.activateBundle(selectedFeedback.value.word_id, bundleId)
+    ElMessage.success('版本已启用')
+    await Promise.all([loadVersions(), loadBankStatuses()])
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '版本尚未就绪')
+  }
+}
 
 onMounted(async () => {
   if (!isAdmin.value) { router.replace('/dashboard'); return }
@@ -266,7 +418,8 @@ onMounted(async () => {
     const { data } = await settingsAPI.getConfigs()
     for (const c of data) {
       const form = c.provider === 'deepseek' ? deepseekForm : minimaxForm
-      form.api_key = (c.api_key_masked && c.api_key_masked !== '****') ? c.api_key_masked : ''
+      savedKeys[c.provider as 'deepseek' | 'minimax'] = Boolean(c.has_api_key)
+      form.api_key = ''
       form.api_base = c.api_base
       form.text_model = c.text_model
       form.image_model = c.image_model
@@ -275,7 +428,7 @@ onMounted(async () => {
   } catch { /* ignore */ }
 
   await loadBankStatuses()
-  pollTimer = setInterval(loadBankStatuses, 3000)
+  pollTimer = setInterval(loadBankStatuses, 10000)
 })
 
 onActivated(() => {
@@ -293,6 +446,8 @@ const saveConfig = async (provider: string) => {
   saving.value = true
   try {
     await settingsAPI.saveConfig({ ...form })
+    savedKeys[provider as 'deepseek' | 'minimax'] = Boolean(form.api_key) || savedKeys[provider as 'deepseek' | 'minimax']
+    form.api_key = ''
     ElMessage.success(`${provider} 配置已保存`)
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '保存失败')
@@ -305,7 +460,7 @@ const saveConfig = async (provider: string) => {
 const testConnection = async (provider: string) => {
   const form = provider === 'deepseek' ? deepseekForm : minimaxForm
   const testing = provider === 'deepseek' ? testingDeepseek : testingMinimax
-  if (!form.api_key) { ElMessage.warning('请先填写 API Key'); return }
+  if (!form.api_key && !savedKeys[provider as 'deepseek' | 'minimax']) { ElMessage.warning('请先填写 API Key'); return }
   testing.value = true
   try {
     const { data } = await settingsAPI.testConnection({ ...form })
@@ -357,6 +512,34 @@ const testConnection = async (provider: string) => {
 }
 .section-desc { font-size: 0.8125rem; color: var(--color-text-muted); margin: 0 0 16px; }
 
+.worker-panel {
+  min-height: 64px;
+  padding: 12px 16px;
+  background: var(--color-bg-paper);
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.worker-stat {
+  min-width: 0;
+  span { display: block; font-size: 0.6875rem; color: var(--color-text-muted); }
+  strong { display: block; margin-top: 2px; font-size: 0.875rem; color: var(--color-text-primary); }
+}
+
+.reserve-row {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
 .preprocess-header {
   display: flex; justify-content: space-between; align-items: flex-start;
   .section-desc { margin-bottom: 12px; }
@@ -393,21 +576,93 @@ const testConnection = async (provider: string) => {
 .status-label { font-size: 0.6875rem; color: var(--color-text-muted); width: 28px; flex-shrink: 0; }
 .status-text { font-size: 0.6875rem; color: var(--color-text-secondary); white-space: nowrap; }
 .text-muted { color: var(--color-text-muted); }
-.rate-limit-banner {
-  font-size: 0.75rem;
-  color: #b88200;
-  background: rgba(255, 193, 7, 0.12);
-  padding: 4px 8px;
-  border-radius: 4px;
-  margin-bottom: 4px;
-  border-left: 3px solid #ffc107;
+
+.feedback-row {
+  min-height: 64px;
+  padding: 10px 12px;
+  background: var(--color-bg-paper);
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  & + & { margin-top: 8px; }
 }
 
+.feedback-copy {
+  min-width: 0;
+  strong { display: block; font-size: 0.875rem; color: var(--color-text-primary); }
+  span { display: block; font-size: 0.75rem; color: var(--color-text-secondary); }
+  small { display: block; margin-top: 2px; color: var(--color-text-muted); overflow-wrap: anywhere; }
+}
+
+.version-list {
+  min-height: 120px;
+  max-height: 52vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.version-row {
+  padding: 10px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.version-media {
+  width: 104px;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--color-bg-muted);
+  img { width: 100%; height: 100%; object-fit: cover; display: block; }
+}
+
+.version-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-light);
+  font-size: 0.6875rem;
+}
+
+.version-copy {
+  min-width: 0;
+  p { margin: 8px 0 4px; color: var(--color-text-secondary); font-size: 0.8125rem; line-height: 1.5; }
+  small { color: var(--color-text-muted); }
+}
+
+.version-title, .version-actions, .editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-title { justify-content: space-between; }
+.version-actions { margin-top: 10px; }
+.version-editor { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--color-border-light); }
+.editor-actions { justify-content: flex-end; }
 :deep(.el-form-item) { margin-bottom: 12px; }
 :deep(.el-form-item__label) { font-size: 0.75rem; color: var(--color-text-muted); padding-bottom: 2px; }
 
 @media (max-width: 640px) {
   .provider-cards { grid-template-columns: 1fr; }
   .toggle-desc { max-width: 220px; }
+  .worker-panel { grid-template-columns: 1fr 1fr; }
+  .reserve-row { grid-template-columns: 1fr auto; }
+  .bank-info { flex-basis: 90px; }
+  .feedback-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .feedback-row > .el-button { grid-column: 1 / -1; width: 100%; }
+  .version-row { grid-template-columns: 76px minmax(0, 1fr); }
+  .version-media { width: 76px; }
+  .version-actions { flex-direction: column; align-items: stretch; }
 }
 </style>

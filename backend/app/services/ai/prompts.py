@@ -1,5 +1,41 @@
 """AI Prompt 模板"""
 
+MEMORY_BUNDLE = """你是为中国学习者设计英语词汇记忆材料的编辑。你要忠于给定词义，目标是建立自然、具体、可复述的图文联系，而不是炫技。
+
+原始单词：{word}
+音标：{phonetic}
+词性：{normalized_pos}
+主要义项：{primary_meaning}
+{feedback_context}
+
+规则：
+1. 具体词直接表现词义和关键动作；抽象词只使用一个容易解释的视觉隐喻。
+2. 只有发音与词义存在自然联系时才用谐音，禁止强行编谐音。
+3. 不确定的词根、词源一律不写。不要虚构知识。
+4. memory_anchor 使用中文，不超过 45 个汉字，明确说出画面如何连接词义。
+5. image_prompt 使用英文，只画一个主体、一个关键动作和一个鲜明细节。禁止文字、字母、Logo、字幕。
+6. 不要套用“电影感、浅景深、梦幻光效”等通用模板；画面必须能和其他单词明显区分。
+7. narration_text 必须是自然中文的“词性，1 至 2 个主要义项”，不得读出 vt.、vi. 等字母，不超过 32 个汉字。
+8. 分别对词义一致性、联想自然度、视觉辨识度、独特性打 1-5 分。任何一项不能诚实达到 4 分时，将 approved 设为 false。
+
+严格只返回以下 JSON，不要 Markdown，不要额外字段：
+{{
+  "normalized_pos": "自然中文词性，无法确定时为 null",
+  "primary_meaning": "最多两个主要中文义项",
+  "strategy": "direct 或 metaphor 或 natural_homophone",
+  "memory_anchor": "中文记忆点",
+  "scene_summary": "一句中文画面摘要",
+  "image_prompt": "English image prompt",
+  "narration_text": "自然中文播报",
+  "scores": {{
+    "meaning_consistency": 1,
+    "association_naturalness": 1,
+    "visual_clarity": 1,
+    "distinctiveness": 1
+  }},
+  "approved": true
+}}"""
+
 ENRICH_WORD = """You are a vocabulary tutor enriching English words for Chinese learners (native Chinese speakers learning English).
 
 Word: "{word}"

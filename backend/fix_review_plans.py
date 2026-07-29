@@ -48,8 +48,10 @@ def fix_review_plans():
                 plan = ReviewPlan(
                     group_id=group.id,
                     review_date=review_date,
+                    original_date=review_date,
                     review_round=round_num,
-                    status="pending"
+                    status="pending",
+                    postponed_days=0,
                 )
                 db.add(plan)
                 print(f"    第{round_num}轮: {review_date}")

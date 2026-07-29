@@ -1,6 +1,15 @@
-"""MiniMax Provider — 文本 + 图像生成 + TTS"""
+"""MiniMax China provider: text, Image-01, Speech 2.8 and plan quota."""
+import base64
+from typing import Any
+
 import httpx
-from .base import BaseProvider, ProviderConfig, RateLimitError, ProviderError
+
+from .base import (
+    BaseProvider,
+    ProviderError,
+    QuotaExhaustedError,
+    RateLimitError,
+)
 
 
 def _parse_rate_limit_headers(headers) -> tuple[bool, float]:
@@ -16,7 +25,7 @@ def _parse_rate_limit_headers(headers) -> tuple[bool, float]:
     # MiniMax 风格的限流标记
     for k in ("x-ratelimit-remaining", "x-request-cost", "x-quota-remaining"):
         v = h.get(k)
-        if v is not None and v not in ("0", ""):
+        if v is not None and v != "":
             try:
                 if float(v) <= 0:
                     return True, 60.0
@@ -25,38 +34,69 @@ def _parse_rate_limit_headers(headers) -> tuple[bool, float]:
     return False, 0.0
 
 
-def _check_rate_limit_in_body(data) -> tuple[bool, float]:
-    """从响应体解析 MiniMax 的 base_resp 错误码识别限流.
-    常见 status_code: 1004 (限流), 1008 (余额), 1039 (token rate) 等.
-    任何 status_code > 0 (且不是 success 的 0) 都视为需要处理.
-    """
+def _raise_for_http_error(resp: httpx.Response, operation: str) -> None:
+    if resp.status_code == 429:
+        _, retry = _parse_rate_limit_headers(resp.headers)
+        raise RateLimitError(
+            f"MiniMax {operation} 429 Too Many Requests",
+            retry_after=retry or 60.0,
+        )
+    if resp.status_code >= 500:
+        raise RateLimitError(
+            f"MiniMax {operation} service unavailable ({resp.status_code})",
+            retry_after=60.0,
+        )
+    if resp.status_code >= 400:
+        raise ProviderError(
+            f"MiniMax {operation} HTTP {resp.status_code}",
+            code=f"http_{resp.status_code}",
+        )
+
+
+TRANSIENT_CODES = {1000, 1001, 1002, 1024, 1033, 2045}
+QUOTA_CODES = {2056}
+
+
+def _base_response(data: Any) -> dict:
     if not isinstance(data, dict):
-        return False, 0.0
+        return {}
     base = data.get("base_resp") or data
-    if not isinstance(base, dict):
-        return False, 0.0
+    return base if isinstance(base, dict) else {}
+
+
+def _raise_for_body_error(data: Any, operation: str) -> None:
+    base = _base_response(data)
     status_code = base.get("status_code")
-    if status_code is None:
-        return False, 0.0
+    if status_code in (None, 0, "0"):
+        return
     try:
         code = int(status_code)
     except (ValueError, TypeError):
-        return False, 0.0
-    # 显式限流 / 配额类
-    if code in (1002, 1003, 1004, 1008, 1013, 1024, 1025, 1039):
-        return True, 60.0
-    # 任何非 0 错误码都视作 API 错误 (含限流) — 让上层按 rate_limited 处理
-    if code != 0:
-        return True, 60.0
-    return False, 0.0
+        raise ProviderError(f"MiniMax {operation} 返回未知错误码: {status_code}")
+    message = (
+        base.get("status_msg")
+        or base.get("message")
+        or f"MiniMax {operation} failed"
+    )
+    if code in QUOTA_CODES:
+        raise QuotaExhaustedError(message, code=str(code))
+    if code in TRANSIENT_CODES:
+        raise RateLimitError(
+            f"MiniMax {operation} 暂时不可用 ({code}): {message}",
+            retry_after=60.0,
+        )
+    raise ProviderError(
+        f"MiniMax {operation} 配置或请求错误 ({code}): {message}",
+        code=str(code),
+    )
 
 
 class MiniMaxProvider(BaseProvider):
     """MiniMax API
 
-    文本模型: minimax-m2, minimax-m2.7
+    文本模型: MiniMax-M2.7
     图像生成: image-01
-    语音合成: speech-02
+    语音合成: speech-2.8-turbo
     """
 
     def _endpoint(self, path: str) -> str:
@@ -70,7 +110,7 @@ class MiniMaxProvider(BaseProvider):
         }
 
     async def chat(self, messages: list[dict], **kwargs) -> str:
-        model = kwargs.pop("model", self.config.text_model or "minimax-m2")
+        model = kwargs.pop("model", self.config.text_model or "MiniMax-M2.7")
         async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
             resp = await client.post(
                 self._endpoint("/v1/text/chatcompletion_v2"),
@@ -86,14 +126,9 @@ class MiniMaxProvider(BaseProvider):
             limited, retry = _parse_rate_limit_headers(resp.headers)
             if limited:
                 raise RateLimitError(f"MiniMax chat rate limited (retry after {retry}s)", retry_after=retry)
-            if resp.status_code == 429:
-                raise RateLimitError("MiniMax chat 429 Too Many Requests", retry_after=retry or 60.0)
-            resp.raise_for_status()
+            _raise_for_http_error(resp, "chat")
             data = resp.json()
-            # body-level 限流检测
-            limited, retry = _check_rate_limit_in_body(data)
-            if limited:
-                raise RateLimitError(f"MiniMax chat base_resp rate limit (retry after {retry}s)", retry_after=retry)
+            _raise_for_body_error(data, "chat")
             return data["choices"][0]["message"]["content"]
 
     async def generate_image(self, prompt: str, **kwargs) -> bytes:
@@ -114,24 +149,22 @@ class MiniMaxProvider(BaseProvider):
             limited, retry = _parse_rate_limit_headers(resp.headers)
             if limited:
                 raise RateLimitError(f"MiniMax image rate limited (retry after {retry}s)", retry_after=retry)
-            if resp.status_code == 429:
-                raise RateLimitError("MiniMax image 429 Too Many Requests", retry_after=retry or 60.0)
-            resp.raise_for_status()
+            _raise_for_http_error(resp, "image")
             data = resp.json()
-            limited, retry = _check_rate_limit_in_body(data)
-            if limited:
-                raise RateLimitError(f"MiniMax image base_resp rate limit (retry after {retry}s)", retry_after=retry)
-            import base64
+            _raise_for_body_error(data, "image")
             b64 = data["data"]["image_base64"][0]
-            return base64.b64decode(b64)
+            content = base64.b64decode(b64)
+            if len(content) < 100 or content[:1] not in (b"\x89", b"\xff", b"R"):
+                raise ProviderError("MiniMax image returned invalid image bytes")
+            return content
 
     async def text_to_speech(self, text: str, **kwargs) -> bytes:
-        """MiniMax Speech-02 语音合成, 返回 MP3 二进制"""
-        model = kwargs.pop("model", self.config.speech_model or "speech-02")
-        voice = kwargs.pop("voice", "default")
+        """MiniMax Speech 2.8 T2A v2, whose audio field defaults to hex."""
+        model = kwargs.pop("model", self.config.speech_model or "speech-2.8-turbo")
+        voice = kwargs.pop("voice", "Chinese (Mandarin)_Warm_Girl")
         async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
             resp = await client.post(
-                self._endpoint("/v1/text_to_speech"),
+                self._endpoint("/v1/t2a_v2"),
                 headers=self._headers(),
                 json={
                     "model": model,
@@ -139,51 +172,46 @@ class MiniMaxProvider(BaseProvider):
                     "voice_setting": {
                         "voice_id": voice,
                         "speed": kwargs.get("speed", 1.0),
-                        "emotion": kwargs.get("emotion", "neutral"),
+                        "vol": kwargs.get("volume", 1.0),
+                        "pitch": kwargs.get("pitch", 0),
                     },
-                    "audio_setting": {"format": "mp3"},
+                    "audio_setting": {
+                        "audio_sample_rate": 32000,
+                        "bitrate": 128000,
+                        "format": "mp3",
+                        "channel": 1,
+                    },
+                    "language_boost": "Chinese",
+                    "output_format": "hex",
                 },
             )
             limited, retry = _parse_rate_limit_headers(resp.headers)
             if limited:
                 raise RateLimitError(f"MiniMax TTS rate limited (retry after {retry}s)", retry_after=retry)
-            if resp.status_code == 429:
-                raise RateLimitError("MiniMax TTS 429 Too Many Requests", retry_after=retry or 60.0)
-            resp.raise_for_status()
+            _raise_for_http_error(resp, "speech")
             data = resp.json()
 
-            # body-level 限流检测 (在解包 base_resp 之前)
-            limited, retry = _check_rate_limit_in_body(data)
-            if limited:
-                raise RateLimitError(f"MiniMax TTS base_resp rate limit (retry after {retry}s)", retry_after=retry)
+            _raise_for_body_error(data, "speech")
+            audio_hex = (data.get("data") or {}).get("audio")
+            if not audio_hex:
+                raise ProviderError("MiniMax speech response has no audio")
+            try:
+                content = bytes.fromhex(audio_hex)
+            except ValueError as exc:
+                raise ProviderError("MiniMax speech returned invalid hex audio") from exc
+            if len(content) < 100:
+                raise ProviderError("MiniMax speech returned empty audio")
+            return content
 
-            # 新包装格式: {"base_resp": {...}}
-            if "base_resp" in data and isinstance(data["base_resp"], dict):
-                data = data["base_resp"]
+    async def get_quota(self) -> dict:
+        """Return the raw Token Plan remaining payload from the China account site."""
 
-            # MiniMax TTS v2: audio in base64 at top level or in data.audio
-            import base64
-
-            # 新格式: {"data": {"audio": "base64..."}}
-            if "data" in data and isinstance(data["data"], dict):
-                audio_b64 = data["data"].get("audio")
-                if audio_b64:
-                    return base64.b64decode(audio_b64)
-
-            # 旧格式: URL 下载
-            audio_url = data.get("audio_file") or data.get("audio_url")
-            if audio_url:
-                async with httpx.AsyncClient(trust_env=False) as c2:
-                    ar = await c2.get(audio_url)
-                    ar.raise_for_status()
-                    return ar.content
-
-            # 兜底: 尝试将整个 response content 当作音频
-            if resp.content and len(resp.content) > 100:
-                return resp.content
-
-            import logging
-            logging.getLogger(__name__).warning(
-                f"MiniMax TTS unexpected response keys: {list(data.keys()) if isinstance(data, dict) else type(data)}"
+        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+            resp = await client.get(
+                "https://www.minimaxi.com/v1/token_plan/remains",
+                headers=self._headers(),
             )
-            raise RuntimeError("Unexpected TTS response format")
+            _raise_for_http_error(resp, "quota")
+            data = resp.json()
+            _raise_for_body_error(data, "quota")
+            return data

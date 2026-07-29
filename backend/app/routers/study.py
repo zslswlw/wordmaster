@@ -1,96 +1,178 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from datetime import datetime, date, timedelta
-from typing import List
 import random
+from datetime import timedelta
+from typing import Optional
 
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-def _web_image_url(filepath: str) -> str | None:
-    """Convert filesystem path to web URL for frontend"""
-    if not filepath:
-        return None
-    filename = os.path.basename(filepath)
-    return f"/ai-images/{filename}"
-import json
-
-from ..models import get_db, User, WordBank, Word, StudyGroup, StudyRecord, ReviewPlan
-from ..schemas import StudyCheckRequest, StudyCheckResponse, ReviewPlanResponse
 from ..auth import get_current_user
-from .study_refactored import get_study_words
+from ..clock import BusinessClock, get_clock
+from ..models import (
+    MemoryExposure,
+    ReviewPlan,
+    StudyGroup,
+    StudyRecord,
+    User,
+    Word,
+    get_db,
+)
+from ..schemas import StudyCheckRequest, StudyCheckResponse
+from ..services.learning_content import (
+    LearningContentResolver,
+    prioritize_group_resources,
+)
+from .study_refactored import (
+    VALID_STUDY_TYPES,
+    calculate_study_state,
+    get_round_state,
+    summarize_rounds,
+)
+
 
 router = APIRouter(prefix="/api/study", tags=["study"])
-
 EBINGHAUS_INTERVALS = [1, 3, 7, 15, 30]
-MASTERY_THRESHOLD = 3  # 连续正确此次数后跳过复习
 
 
-def _get_consecutive_correct(db: Session, word_id: int, group_id: int) -> int:
-    """返回单词在指定学习组中连续正确的次数 (按 studied_at 倒序)"""
-    records = (
-        db.query(StudyRecord)
-        .filter(StudyRecord.word_id == word_id, StudyRecord.group_id == group_id)
-        .order_by(StudyRecord.studied_at.desc())
-        .all()
-    )
-    count = 0
-    for r in records:
-        if r.correct:
-            count += 1
-        else:
-            break
-    return count
-
-
-def _adapt_next_review_interval(db: Session, group_id: int, group: StudyGroup) -> None:
-    """自适应调整下一次复习计划的间隔。
-
-    根据全组单词的掌握程度 (连续正确率) 延长下次复习的天数。
-    掌握度越高，间隔延长越多 (最多 ×1.5)。
-    """
-    words = db.query(Word).filter(
+def _group_words_query(db: Session, group: StudyGroup):
+    return db.query(Word).filter(
         Word.bank_id == group.bank_id,
         Word.seq_num >= group.start_seq,
-        Word.seq_num <= group.end_seq
-    ).all()
-    if not words:
-        return
-
-    # 计算掌握率：连续正确 ≥ MASTERY_THRESHOLD 的单词占比
-    mastered = sum(1 for w in words if _get_consecutive_correct(db, w.id, group_id) >= MASTERY_THRESHOLD)
-    mastery_rate = mastered / len(words)
-
-    # 低于 60% 不延长；60%-100% 线性映射到 ×1.0-×1.5
-    if mastery_rate < 0.6:
-        return
-
-    factor = 1.0 + (mastery_rate - 0.6) * 1.25  # 0.6→1.0, 1.0→1.5
-
-    next_plan = (
-        db.query(ReviewPlan)
-        .filter(
-            ReviewPlan.group_id == group_id,
-            ReviewPlan.status == "pending"
-        )
-        .order_by(ReviewPlan.review_date.asc())
-        .first()
+        Word.seq_num <= group.end_seq,
     )
-    if not next_plan:
-        return
 
-    # 计算当前间隔 (original_date 到 review_date 的天数)
-    current_interval = (next_plan.review_date - next_plan.original_date).days
-    if current_interval <= 0:
-        return
 
-    new_interval = max(current_interval, int(current_interval * factor))
-    extra_days = new_interval - current_interval
-    if extra_days <= 0:
-        return
+def _group_word_ids(db: Session, group: StudyGroup) -> list[int]:
+    return [
+        word.id
+        for word in _group_words_query(db, group).order_by(Word.seq_num.asc(), Word.id.asc()).all()
+    ]
 
-    next_plan.review_date = next_plan.review_date + timedelta(days=extra_days)
-    next_plan.postponed_days = (next_plan.postponed_days or 0) + extra_days
-    db.commit()
+
+def _records_query(
+    db: Session,
+    group_id: int,
+    study_type: str,
+    plan_id: Optional[int] = None,
+):
+    query = db.query(StudyRecord).filter(
+        StudyRecord.group_id == group_id,
+        StudyRecord.study_type == study_type,
+    )
+    if plan_id is None:
+        return query.filter(StudyRecord.plan_id.is_(None))
+    return query.filter(StudyRecord.plan_id == plan_id)
+
+
+def _shuffle_word_ids(word_ids: list[int]) -> list[int]:
+    result = list(word_ids)
+    if os.getenv("ENV") == "test":
+        random.Random(int(os.getenv("TEST_RANDOM_SEED", "0"))).shuffle(result)
+    else:
+        random.shuffle(result)
+    return result
+
+
+def _get_group(db: Session, group_id: int, user_id: int) -> StudyGroup:
+    group = db.query(StudyGroup).filter(
+        StudyGroup.id == group_id,
+        StudyGroup.user_id == user_id,
+    ).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return group
+
+
+def _get_review_plan(db: Session, group_id: int, plan_id: Optional[int]) -> ReviewPlan:
+    if not plan_id:
+        raise HTTPException(status_code=400, detail="Review plan is required")
+    plan = db.query(ReviewPlan).filter(
+        ReviewPlan.id == plan_id,
+        ReviewPlan.group_id == group_id,
+    ).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Review plan not found")
+    return plan
+
+
+def _earliest_pending_plan(db: Session, group_id: int) -> Optional[ReviewPlan]:
+    return db.query(ReviewPlan).filter(
+        ReviewPlan.group_id == group_id,
+        ReviewPlan.status == "pending",
+    ).order_by(
+        ReviewPlan.review_round.asc(),
+        ReviewPlan.review_date.asc(),
+        ReviewPlan.id.asc(),
+    ).first()
+
+
+def _validate_review_available(
+    db: Session,
+    plan: ReviewPlan,
+    clock: BusinessClock,
+) -> None:
+    if plan.status == "completed":
+        raise HTTPException(status_code=409, detail="Review plan already completed")
+    earliest = _earliest_pending_plan(db, plan.group_id)
+    if earliest and earliest.id != plan.id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"请先完成第{earliest.review_round}轮复习",
+        )
+    if plan.review_date > clock.today():
+        raise HTTPException(status_code=400, detail="复习计划尚未到期")
+
+
+def _resolve_mode(
+    *,
+    is_review: bool = False,
+    is_enhance: bool = False,
+    study_type: Optional[str] = None,
+) -> str:
+    requested = [is_review, is_enhance]
+    if sum(bool(value) for value in requested) > 1:
+        raise HTTPException(status_code=400, detail="Study mode is invalid")
+    inferred = "review" if is_review else ("enhance" if is_enhance else "new")
+    mode = study_type or inferred
+    if mode not in VALID_STUDY_TYPES:
+        raise HTTPException(status_code=400, detail="Study mode is invalid")
+    if study_type and (is_review or is_enhance) and mode != inferred:
+        raise HTTPException(status_code=400, detail="Study mode parameters conflict")
+    return mode
+
+
+def _create_review_plans(
+    db: Session,
+    group_id: int,
+    base_date,
+) -> None:
+    existing_rounds = {
+        plan.review_round
+        for plan in db.query(ReviewPlan).filter(ReviewPlan.group_id == group_id).all()
+    }
+    for review_round, interval in enumerate(EBINGHAUS_INTERVALS, 1):
+        if review_round in existing_rounds:
+            continue
+        review_date = base_date + timedelta(days=interval)
+        db.add(ReviewPlan(
+            group_id=group_id,
+            review_date=review_date,
+            original_date=review_date,
+            review_round=review_round,
+            status="pending",
+            postponed_days=0,
+        ))
+
+
+def _validate_enhance_unlocked(
+    db: Session,
+    group: StudyGroup,
+    all_word_ids: list[int],
+) -> None:
+    new_records = _records_query(db, group.id, "new").all()
+    if not calculate_study_state(all_word_ids, new_records).phase_complete:
+        raise HTTPException(status_code=409, detail="请先完成新学阶段")
 
 
 @router.post("/start/{group_id}")
@@ -100,77 +182,54 @@ def start_study(
     is_enhance: bool = False,
     plan_id: int = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    clock: BusinessClock = Depends(get_clock),
 ):
-    group = db.query(StudyGroup).filter(
-        StudyGroup.id == group_id,
-        StudyGroup.user_id == current_user.id
-    ).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    
-    if not is_review and not is_enhance:
+    mode = _resolve_mode(is_review=is_review, is_enhance=is_enhance)
+    group = _get_group(db, group_id, current_user.id)
+    review_plan = None
+
+    if mode == "review":
+        review_plan = _get_review_plan(db, group_id, plan_id)
+        if review_plan.status == "completed":
+            return {
+                "group_id": group.id,
+                "group_name": group.name,
+                "total_words": 0,
+                "current_round": review_plan.review_round,
+                "word_ids": [],
+                "is_completed": True,
+            }
+        _validate_review_available(db, review_plan, clock)
+    elif plan_id is not None:
+        raise HTTPException(status_code=400, detail="Plan is only valid for review mode")
+
+    if mode == "new":
         if group.status == "completed":
             raise HTTPException(status_code=400, detail="Group already completed")
-        group.status = "learning"
-        db.commit()
-    
-    words = db.query(Word).filter(
-        Word.bank_id == group.bank_id,
-        Word.seq_num >= group.start_seq,
-        Word.seq_num <= group.end_seq
-    ).all()
-    
-    word_ids = [w.id for w in words]
-    
-    # 根据模式选择查询的学习类型
-    query_study_type = "review" if is_review else ("enhance" if is_enhance else "new")
-    
-    # 构建查询 - 复习模式时如果提供了plan_id，则只查询该计划的记录
-    records_query = db.query(StudyRecord).filter(
-        StudyRecord.group_id == group_id,
-        StudyRecord.study_type == query_study_type
-    )
-    
-    # 如果提供了plan_id，只查询该复习计划的记录；否则只查询plan_id为null的记录（避免数据污染）
-    if plan_id:
-        records_query = records_query.filter(StudyRecord.plan_id == plan_id)
-    else:
-        records_query = records_query.filter(StudyRecord.plan_id == None)
-    
-    existing_records = records_query.all()
-    
-    # 使用统一的学习逻辑
-    study_word_ids, current_round, is_completed = get_study_words(
-        all_word_ids=word_ids,
-        existing_records=existing_records,
-        study_type=query_study_type
-    )
+        if group.status != "learning":
+            group.status = "learning"
+            db.commit()
 
-    # 自适应复习: 跳过已掌握单词 (连续正确 ≥ MASTERY_THRESHOLD)
-    skipped_mastered: list[int] = []
-    if is_review and study_word_ids:
-        to_skip = []
-        for wid in study_word_ids:
-            if _get_consecutive_correct(db, wid, group_id) >= MASTERY_THRESHOLD:
-                to_skip.append(wid)
-        if to_skip:
-            study_word_ids = [w for w in study_word_ids if w not in to_skip]
-            skipped_mastered = to_skip
-        # 全部跳过 → 视为完成
-        if not study_word_ids:
-            is_completed = True
+    prioritize_group_resources(db, group)
+    all_word_ids = _group_word_ids(db, group)
+    if not all_word_ids:
+        raise HTTPException(status_code=400, detail="Study group contains no words")
 
-    random.shuffle(study_word_ids) if study_word_ids else None
+    if mode == "enhance":
+        _validate_enhance_unlocked(db, group, all_word_ids)
+
+    records = _records_query(db, group_id, mode, plan_id if mode == "review" else None).all()
+    state = calculate_study_state(all_word_ids, records)
+    remaining = _shuffle_word_ids(state.remaining_word_ids)
 
     return {
-        "group_id": group_id,
+        "group_id": group.id,
         "group_name": group.name,
-        "total_words": len(study_word_ids),
-        "skipped_mastered": len(skipped_mastered),
-        "current_round": current_round,
-        "word_ids": study_word_ids,
-        "is_completed": is_completed
+        "total_words": len(remaining),
+        "current_round": state.current_round,
+        "word_ids": remaining,
+        "is_completed": state.phase_complete,
     }
 
 
@@ -178,11 +237,12 @@ def start_study(
 def get_word(
     word_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
     word = db.query(Word).filter(Word.id == word_id).first()
     if not word:
         raise HTTPException(status_code=404, detail="Word not found")
+    content = LearningContentResolver(db).resolve(word)
     return {
         "id": word.id,
         "word": word.word,
@@ -191,57 +251,119 @@ def get_word(
         "example_l1": word.example_l1,
         "example_l2": word.example_l2,
         "example_l3": word.example_l3,
-        "mnemonic": word.mnemonic,
+        "mnemonic": content["memory_anchor"],
         "etymology": word.etymology,
         "word_family": word.word_family,
         "synonyms": word.synonyms,
-        "image_url": _web_image_url(word.image_url),
+        "image_url": content["image_url"],
         "image_prompt": word.image_prompt,
-        "context_audio": word.context_audio,
+        "context_audio": content["narration_audio_url"],
         "enriched": word.enriched,
+        "learning_content": content,
     }
+
+
+def _existing_answer(
+    db: Session,
+    request: StudyCheckRequest,
+) -> Optional[StudyRecord]:
+    query = db.query(StudyRecord).filter(
+        StudyRecord.group_id == request.group_id,
+        StudyRecord.word_id == request.word_id,
+        StudyRecord.round == request.round,
+        StudyRecord.study_type == request.study_type,
+    )
+    if request.plan_id is None:
+        query = query.filter(StudyRecord.plan_id.is_(None))
+    else:
+        query = query.filter(StudyRecord.plan_id == request.plan_id)
+    return query.order_by(StudyRecord.id.desc()).first()
 
 
 @router.post("/check", response_model=StudyCheckResponse)
 def check_answer(
     request: StudyCheckRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    clock: BusinessClock = Depends(get_clock),
 ):
-    # 验证学习组是否存在且属于当前用户
-    group = db.query(StudyGroup).filter(
-        StudyGroup.id == request.group_id,
-        StudyGroup.user_id == current_user.id
+    group = _get_group(db, request.group_id, current_user.id)
+    word = db.query(Word).filter(
+        Word.id == request.word_id,
+        Word.bank_id == group.bank_id,
+        Word.seq_num >= group.start_seq,
+        Word.seq_num <= group.end_seq,
     ).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    
-    word = db.query(Word).filter(Word.id == request.word_id).first()
     if not word:
-        raise HTTPException(status_code=404, detail="Word not found")
-    
-    correct = request.user_input.strip().lower() == word.word.strip().lower()
-    
-    try:
-        record = StudyRecord(
-            group_id=request.group_id,
-            word_id=request.word_id,
-            round=request.round,
-            correct=correct,
-            study_type=request.study_type,
-            plan_id=request.plan_id
+        raise HTTPException(status_code=404, detail="Word not found in group")
+
+    review_plan = None
+    if request.study_type == "review":
+        review_plan = _get_review_plan(db, request.group_id, request.plan_id)
+    elif request.plan_id is not None:
+        raise HTTPException(status_code=400, detail="Plan is only valid for review mode")
+
+    existing = _existing_answer(db, request)
+    if existing:
+        return StudyCheckResponse(
+            correct=existing.correct,
+            correct_answer=word.word,
+            word=word.word,
         )
-        db.add(record)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to save record: {str(e)}")
-    
-    return StudyCheckResponse(
+
+    if request.study_type == "review":
+        _validate_review_available(db, review_plan, clock)
+    elif request.study_type == "new" and group.status == "completed":
+        raise HTTPException(status_code=409, detail="Group already completed")
+
+    all_word_ids = _group_word_ids(db, group)
+    if request.study_type == "enhance":
+        _validate_enhance_unlocked(db, group, all_word_ids)
+    records = _records_query(
+        db,
+        request.group_id,
+        request.study_type,
+        request.plan_id if request.study_type == "review" else None,
+    ).all()
+    state = calculate_study_state(all_word_ids, records)
+    if state.phase_complete:
+        raise HTTPException(status_code=409, detail="Study phase already completed")
+    if request.round != state.current_round:
+        raise HTTPException(status_code=409, detail=f"Current round is {state.current_round}")
+    if request.word_id not in state.remaining_word_ids:
+        raise HTTPException(status_code=409, detail="Word is not pending in the current round")
+
+    correct = request.user_input.strip().lower() == word.word.strip().lower()
+    record = StudyRecord(
+        group_id=request.group_id,
+        word_id=request.word_id,
+        round=request.round,
         correct=correct,
-        correct_answer=word.word,
-        word=word.word
+        study_type=request.study_type,
+        plan_id=request.plan_id,
+        user_input=request.user_input,
+        studied_at=clock.utcnow(),
     )
+    db.add(record)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = _existing_answer(db, request)
+        if not existing:
+            raise HTTPException(status_code=409, detail="Answer was submitted concurrently")
+        correct = existing.correct
+
+    exposure = db.query(MemoryExposure).filter(
+        MemoryExposure.user_id == current_user.id,
+        MemoryExposure.word_id == request.word_id,
+        MemoryExposure.next_result.is_(None),
+    ).order_by(MemoryExposure.exposed_at.desc()).first()
+    if exposure:
+        exposure.next_result = correct
+        db.commit()
+
+    return StudyCheckResponse(correct=correct, correct_answer=word.word, word=word.word)
 
 
 @router.post("/complete/{group_id}")
@@ -252,113 +374,73 @@ def complete_round(
     study_type: str = None,
     plan_id: int = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    clock: BusinessClock = Depends(get_clock),
 ):
-    group = db.query(StudyGroup).filter(
-        StudyGroup.id == group_id,
-        StudyGroup.user_id == current_user.id
-    ).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    
-    # 复习模式：像新学一样多轮进行，直到所有单词正确
-    if is_review or study_type == "review":
-        # 根据参数构建查询
-        query = db.query(StudyRecord).filter(StudyRecord.group_id == group_id)
-        if study_type:
-            query = query.filter(StudyRecord.study_type == study_type)
-        # 如果提供了plan_id，只查询该复习计划的记录；否则只查询plan_id为null的记录
-        if plan_id:
-            query = query.filter(StudyRecord.plan_id == plan_id)
-        else:
-            query = query.filter(StudyRecord.plan_id == None)
-        
-        records = query.all()
-        
-        if not records:
-            return {"message": "No records", "next_step": "continue"}
-        
-        current_round = max(r.round for r in records)
-        wrong_count = sum(1 for r in records if not r.correct and r.round == current_round)
-        
-        if wrong_count == 0:
-            # 当前轮次全部正确，复习完成
-            if plan_id:
-                review_plan = db.query(ReviewPlan).filter(
-                    ReviewPlan.id == plan_id,
-                    ReviewPlan.group_id == group_id
-                ).first()
-                if review_plan:
-                    review_plan.status = "completed"
-                    review_plan.completed_at = datetime.utcnow()
-                    db.commit()
+    mode = _resolve_mode(
+        is_review=is_review,
+        is_enhance=is_enhance,
+        study_type=study_type,
+    )
+    group = _get_group(db, group_id, current_user.id)
+    review_plan = None
 
-                    # 自适应间隔：根据掌握程度延长下次复习间隔
-                    _adapt_next_review_interval(db, group_id, group)
-            return {"message": "Review completed successfully", "status": "completed", "next_step": "completed"}
-        else:
-            # 复习还有错误，继续下一轮复习（像新学一样）
-            return {"message": f"{wrong_count} words wrong", "next_step": "continue"}
-    
-    # 强化听写模式
-    if is_enhance:
-        # 查询强化听写模式的记录
-        enhance_records = db.query(StudyRecord).filter(
-            StudyRecord.group_id == group_id,
-            StudyRecord.study_type == "enhance"
-        ).all()
-        
-        if not enhance_records:
-            return {"message": "No records", "next_step": "continue"}
-        
-        current_round = max(r.round for r in enhance_records)
-        wrong_count = sum(1 for r in enhance_records if not r.correct and r.round == current_round)
-        
-        if wrong_count == 0:
-            # 强化学习完成，标记为完成状态
-            group.status = "completed"
-            group.completed_at = datetime.utcnow()
-            
-            today = date.today()
-            for round_num, interval in enumerate(EBINGHAUS_INTERVALS, 1):
-                review_date = today + timedelta(days=interval)
-                plan = ReviewPlan(
-                    group_id=group_id,
-                    review_date=review_date,
-                    original_date=review_date,
-                    review_round=round_num,
-                    postponed_days=0
-                )
-                db.add(plan)
-            
-            db.commit()
-            return {"message": "Group completed successfully", "status": "completed", "next_step": "completed"}
-        else:
-            # 强化学习还有错误，需要继续强化
-            return {"message": f"{wrong_count} words wrong in enhance round", "next_step": "continue"}
-    
-    # 新学模式
-    # 根据参数构建查询，默认只统计新学模式
-    query = db.query(StudyRecord).filter(StudyRecord.group_id == group_id)
-    if study_type:
-        query = query.filter(StudyRecord.study_type == study_type)
-    else:
-        query = query.filter(StudyRecord.study_type == "new")
-    if plan_id:
-        query = query.filter(StudyRecord.plan_id == plan_id)
-    
-    records = query.all()
-    
-    if not records:
-        return {"message": "No records", "next_step": "continue"}
-    
-    current_round = max(r.round for r in records)
-    wrong_count = sum(1 for r in records if not r.correct and r.round == current_round)
-    
-    if wrong_count == 0:
+    if mode == "review":
+        review_plan = _get_review_plan(db, group_id, plan_id)
+        if review_plan.status == "completed":
+            return {
+                "message": "Review completed successfully",
+                "status": "completed",
+                "next_step": "completed",
+            }
+        _validate_review_available(db, review_plan, clock)
+    elif plan_id is not None:
+        raise HTTPException(status_code=400, detail="Plan is only valid for review mode")
+
+    all_word_ids = _group_word_ids(db, group)
+    if not all_word_ids:
+        raise HTTPException(status_code=400, detail="Study group contains no words")
+    if mode == "enhance":
+        _validate_enhance_unlocked(db, group, all_word_ids)
+    records = _records_query(db, group_id, mode, plan_id if mode == "review" else None).all()
+    state = calculate_study_state(all_word_ids, records)
+    if not state.phase_complete:
+        return {
+            "message": f"{len(state.remaining_word_ids)} words remaining",
+            "next_step": "continue",
+            "remaining_count": len(state.remaining_word_ids),
+            "current_round": state.current_round,
+        }
+
+    if mode == "new":
         return {"message": "All words correct", "next_step": "enhance"}
-    else:
-        return {"message": f"{wrong_count} words wrong", "next_step": "continue"}
+
+    if mode == "enhance":
+        if group.status != "completed":
+            group.status = "completed"
+            group.completed_at = clock.utcnow()
+        _create_review_plans(db, group_id, clock.today())
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            _create_review_plans(db, group_id, clock.today())
+            db.commit()
+        return {
+            "message": "Group completed successfully",
+            "status": "completed",
+            "next_step": "completed",
+        }
+
+    review_plan.status = "completed"
+    if review_plan.completed_at is None:
+        review_plan.completed_at = clock.utcnow()
+    db.commit()
+    return {
+        "message": "Review completed successfully",
+        "status": "completed",
+        "next_step": "completed",
+    }
 
 
 @router.get("/round/{group_id}")
@@ -368,82 +450,34 @@ def get_round_stats(
     plan_id: int = None,
     current_round: int = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    # 获取学习组信息
-    group = db.query(StudyGroup).filter(
-        StudyGroup.id == group_id,
-        StudyGroup.user_id == current_user.id
-    ).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    
-    # 获取学习组总单词数
-    total_words = db.query(Word).filter(
-        Word.bank_id == group.bank_id,
-        Word.seq_num >= group.start_seq,
-        Word.seq_num <= group.end_seq
-    ).count()
-    
-    query = db.query(StudyRecord).filter(
-        StudyRecord.group_id == group_id
-    )
-    
-    # 如果指定了学习类型，进行过滤；否则默认只统计新学模式
-    if study_type:
-        query = query.filter(StudyRecord.study_type == study_type)
-    else:
-        query = query.filter(StudyRecord.study_type == "new")
-    
-    # 如果指定了复习计划ID，进行过滤；否则只查询plan_id为null的记录
-    if plan_id:
-        query = query.filter(StudyRecord.plan_id == plan_id)
-    else:
-        query = query.filter(StudyRecord.plan_id == None)
+    mode = _resolve_mode(study_type=study_type)
+    group = _get_group(db, group_id, current_user.id)
+    if mode == "review":
+        _get_review_plan(db, group_id, plan_id)
+    elif plan_id is not None:
+        raise HTTPException(status_code=400, detail="Plan is only valid for review mode")
 
-    records = query.all()
-    
-    if not records:
-        return {
-            "current_round": current_round or 1,
-            "total_rounds": 0,
-            "total_words": total_words,
-            "rounds": {}
-        }
-    
-    # 使用字典去重，每个单词每轮只统计一次（取最新记录）
-    round_words = {}  # {round: {word_id: (correct, record_id)}}
-    for r in records:
-        if r.round not in round_words:
-            round_words[r.round] = {}
-        # 如果同一个单词有多个记录，保留最新的（ID最大的）
-        if r.word_id not in round_words[r.round] or r.id > round_words[r.round][r.word_id][1]:
-            round_words[r.round][r.word_id] = (r.correct, r.id)
-    
-    # 统计每轮数据
-    rounds = {}
-    for round_num, words_data in round_words.items():
-        rounds[round_num] = {"correct": 0, "wrong": 0, "total": len(words_data)}
-        for correct, _ in words_data.values():
-            if correct:
-                rounds[round_num]["correct"] += 1
-            else:
-                rounds[round_num]["wrong"] += 1
-    
-    # 确定当前轮次
-    actual_current_round = current_round or max(rounds.keys())
-    current_round_data = rounds.get(actual_current_round, {"correct": 0, "wrong": 0, "total": 0})
-    
-    # 计算本轮单词数：使用实际统计的单词数（正确+错误）
-    current_round_total = current_round_data.get("correct", 0) + current_round_data.get("wrong", 0)
-    
+    all_word_ids = _group_word_ids(db, group)
+    records = _records_query(db, group_id, mode, plan_id if mode == "review" else None).all()
+    state = calculate_study_state(all_word_ids, records)
+    rounds = summarize_rounds(all_word_ids, records)
+    selected_round = current_round or state.current_round
+    selected_state = get_round_state(all_word_ids, records, selected_round)
+    selected = rounds.get(selected_round, {
+        "correct": 0,
+        "wrong": 0,
+        "total": 0,
+        "expected": len(selected_state.target_word_ids) if selected_state else 0,
+        "remaining": len(selected_state.remaining_word_ids) if selected_state else 0,
+    })
+
     return {
-        "current_round": actual_current_round,
-        "total_words": total_words,
+        "current_round": selected_round,
+        "total_rounds": len(rounds),
+        "total_words": len(all_word_ids),
         "rounds": rounds,
-        "current_round_stats": {
-            "correct": current_round_data["correct"],
-            "wrong": current_round_data["wrong"],
-            "total": current_round_total
-        }
+        "is_completed": state.phase_complete,
+        "current_round_stats": selected,
     }

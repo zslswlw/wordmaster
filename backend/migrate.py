@@ -47,7 +47,11 @@ NEW_TABLES = {
             image_enabled BOOLEAN DEFAULT 1,
             mnemonic_enabled BOOLEAN DEFAULT 1,
             error_analysis_enabled BOOLEAN DEFAULT 1,
-            story_enabled BOOLEAN DEFAULT 0
+            story_enabled BOOLEAN DEFAULT 0,
+            ai_worker_paused BOOLEAN DEFAULT 0,
+            quota_reserve_percent INTEGER DEFAULT 30,
+            feedback_reserve_percent INTEGER DEFAULT 20,
+            priority_bank_id INTEGER REFERENCES word_banks(id)
         )
     """,
     "word_error_patterns": """
@@ -60,11 +64,246 @@ NEW_TABLES = {
             count INTEGER DEFAULT 1
         )
     """,
+    "memory_bundles": """
+        CREATE TABLE IF NOT EXISTS memory_bundles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lexeme_key VARCHAR(64) NOT NULL,
+            word_text VARCHAR NOT NULL,
+            normalized_pos VARCHAR,
+            primary_meaning VARCHAR NOT NULL,
+            strategy VARCHAR,
+            memory_anchor VARCHAR(45),
+            scene_summary VARCHAR,
+            image_prompt TEXT,
+            narration_text VARCHAR(64) NOT NULL,
+            prompt_version VARCHAR NOT NULL DEFAULT 'memory-v1',
+            content_version INTEGER NOT NULL DEFAULT 1,
+            text_model VARCHAR,
+            quality_scores TEXT,
+            status VARCHAR NOT NULL DEFAULT 'draft',
+            source_bundle_id INTEGER REFERENCES memory_bundles(id),
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        )
+    """,
+    "memory_assets": """
+        CREATE TABLE IF NOT EXISTS memory_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bundle_id INTEGER NOT NULL REFERENCES memory_bundles(id),
+            asset_type VARCHAR NOT NULL,
+            file_path VARCHAR NOT NULL,
+            sha256 VARCHAR(64) NOT NULL,
+            mime_type VARCHAR NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            model VARCHAR,
+            generation_params TEXT,
+            status VARCHAR NOT NULL DEFAULT 'ready',
+            created_at DATETIME NOT NULL
+        )
+    """,
+    "word_memory_links": """
+        CREATE TABLE IF NOT EXISTS word_memory_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            word_id INTEGER NOT NULL UNIQUE REFERENCES words(id),
+            active_bundle_id INTEGER REFERENCES memory_bundles(id),
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            updated_at DATETIME NOT NULL
+        )
+    """,
+    "memory_feedback": """
+        CREATE TABLE IF NOT EXISTS memory_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            word_id INTEGER NOT NULL REFERENCES words(id),
+            bundle_id INTEGER REFERENCES memory_bundles(id),
+            component VARCHAR NOT NULL,
+            reason VARCHAR NOT NULL,
+            detail TEXT,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            replacement_bundle_id INTEGER REFERENCES memory_bundles(id),
+            auto_attempts INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            resolved_at DATETIME
+        )
+    """,
+    "memory_exposures": """
+        CREATE TABLE IF NOT EXISTS memory_exposures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            word_id INTEGER NOT NULL REFERENCES words(id),
+            bundle_id INTEGER REFERENCES memory_bundles(id),
+            group_id INTEGER REFERENCES study_groups(id),
+            plan_id INTEGER REFERENCES review_plans(id),
+            study_type VARCHAR,
+            exposed_at DATETIME NOT NULL,
+            next_result BOOLEAN
+        )
+    """,
+    "ai_jobs": """
+        CREATE TABLE IF NOT EXISTS ai_jobs (
+            id VARCHAR(36) PRIMARY KEY,
+            kind VARCHAR NOT NULL,
+            target_type VARCHAR NOT NULL,
+            target_id INTEGER NOT NULL,
+            bank_id INTEGER REFERENCES word_banks(id),
+            priority INTEGER NOT NULL DEFAULT 100,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 5,
+            available_at DATETIME NOT NULL,
+            payload TEXT,
+            idempotency_key VARCHAR NOT NULL UNIQUE,
+            last_error_code VARCHAR,
+            last_error_message TEXT,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        )
+    """,
+    "ai_quota_snapshots": """
+        CREATE TABLE IF NOT EXISTS ai_quota_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider VARCHAR NOT NULL,
+            remaining_percent FLOAT,
+            status VARCHAR NOT NULL,
+            reset_at DATETIME,
+            raw_payload TEXT,
+            checked_at DATETIME NOT NULL
+        )
+    """,
 }
 
 
-def migrate():
-    conn = sqlite3.connect(DB_PATH)
+def _table_columns(cursor, table_name):
+    return {row[1] for row in cursor.execute(f"PRAGMA table_info({table_name})")}
+
+
+def _add_column(cursor, table_name, column_name, ddl):
+    if column_name in _table_columns(cursor, table_name):
+        return
+    cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}")
+    print(f"  ✓ 添加列: {table_name}.{column_name}")
+
+
+def _merge_duplicate_review_plans(cursor):
+    duplicates = cursor.execute(
+        """
+        SELECT group_id, review_round
+        FROM review_plans
+        GROUP BY group_id, review_round
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+
+    for group_id, review_round in duplicates:
+        plans = cursor.execute(
+            """
+            SELECT id, review_date, original_date, status, postponed_days, completed_at
+            FROM review_plans
+            WHERE group_id = ? AND review_round = ?
+            ORDER BY id
+            """,
+            (group_id, review_round),
+        ).fetchall()
+        canonical_id = plans[0][0]
+        duplicate_ids = [row[0] for row in plans[1:]]
+        completed_dates = sorted(row[5] for row in plans if row[5])
+        status = "completed" if any(row[3] == "completed" for row in plans) else "pending"
+        review_date = plans[0][1]
+        original_date = plans[0][2] or review_date
+        postponed_days = max((row[4] or 0) for row in plans)
+        completed_at = completed_dates[0] if completed_dates else None
+
+        cursor.execute(
+            """
+            UPDATE review_plans
+            SET review_date = ?, original_date = ?, status = ?,
+                postponed_days = ?, completed_at = ?
+            WHERE id = ?
+            """,
+            (
+                review_date,
+                original_date,
+                status,
+                postponed_days,
+                completed_at,
+                canonical_id,
+            ),
+        )
+        placeholders = ",".join("?" for _ in duplicate_ids)
+        cursor.execute(
+            f"UPDATE study_records SET plan_id = ? WHERE plan_id IN ({placeholders})",
+            (canonical_id, *duplicate_ids),
+        )
+        cursor.execute(
+            f"DELETE FROM review_plans WHERE id IN ({placeholders})",
+            duplicate_ids,
+        )
+        print(f"  ✓ 合并重复复习计划: group={group_id}, round={review_round}")
+
+
+def _migrate_study_core(cursor, existing_tables):
+    if "study_records" not in existing_tables or "review_plans" not in existing_tables:
+        return
+
+    _add_column(cursor, "study_records", "study_type", "VARCHAR DEFAULT 'new'")
+    _add_column(cursor, "study_records", "user_input", "VARCHAR")
+    _add_column(
+        cursor,
+        "study_records",
+        "plan_id",
+        "INTEGER REFERENCES review_plans(id)",
+    )
+    _add_column(cursor, "review_plans", "original_date", "DATE")
+    _add_column(cursor, "review_plans", "postponed_days", "INTEGER DEFAULT 0")
+    _add_column(cursor, "review_plans", "completed_at", "DATETIME")
+
+    cursor.execute("UPDATE study_records SET study_type = 'new' WHERE study_type IS NULL")
+    cursor.execute(
+        "UPDATE review_plans SET original_date = review_date WHERE original_date IS NULL"
+    )
+    cursor.execute(
+        "UPDATE review_plans SET postponed_days = 0 WHERE postponed_days IS NULL"
+    )
+    cursor.execute("UPDATE review_plans SET status = 'pending' WHERE status IS NULL")
+
+    _merge_duplicate_review_plans(cursor)
+
+    cursor.execute(
+        """
+        DELETE FROM study_records
+        WHERE id NOT IN (
+            SELECT MAX(id)
+            FROM study_records
+            GROUP BY group_id, word_id, round, study_type, COALESCE(plan_id, -1)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_study_records_no_plan
+        ON study_records(group_id, word_id, round, study_type)
+        WHERE plan_id IS NULL
+        """
+    )
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_study_records_with_plan
+        ON study_records(plan_id, word_id, round)
+        WHERE plan_id IS NOT NULL
+        """
+    )
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_review_plans_group_round
+        ON review_plans(group_id, review_round)
+        """
+    )
+    print("  ✓ 学习记录与复习计划已去重并建立唯一约束")
+
+
+def migrate(db_path=None):
+    target_path = os.path.abspath(db_path or DB_PATH)
+    conn = sqlite3.connect(target_path)
     cursor = conn.cursor()
 
     # 检查 words 表是否存在
@@ -95,7 +334,7 @@ def migrate():
 
     # 创建新表（幂等，兼容新旧数据库）
     if not words_table_exists:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(target_path)
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         existing_tables = {row[0] for row in cursor.fetchall()}
@@ -106,6 +345,31 @@ def migrate():
             print(f"  ✓ 创建表: {table_name}")
         else:
             print(f"  - 已存在: {table_name}")
+
+    _add_column(
+        cursor,
+        "feature_flags",
+        "ai_worker_paused",
+        "BOOLEAN DEFAULT 0",
+    )
+    _add_column(
+        cursor,
+        "feature_flags",
+        "quota_reserve_percent",
+        "INTEGER DEFAULT 30",
+    )
+    _add_column(
+        cursor,
+        "feature_flags",
+        "feedback_reserve_percent",
+        "INTEGER DEFAULT 20",
+    )
+    _add_column(
+        cursor,
+        "feature_flags",
+        "priority_bank_id",
+        "INTEGER REFERENCES word_banks(id)",
+    )
 
     # 确保 feature_flags 有默认行
     cursor.execute("SELECT COUNT(*) FROM feature_flags")
@@ -139,6 +403,40 @@ def migrate():
             print("  ✓ 首个用户已设为 admin")
         else:
             print("  - 已存在: users.role")
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    existing_tables = {row[0] for row in cursor.fetchall()}
+    _migrate_study_core(cursor, existing_tables)
+
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_bundle_version "
+        "ON memory_bundles(lexeme_key, content_version)"
+    )
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_asset_version "
+        "ON memory_assets(bundle_id, asset_type, version)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_ai_jobs_dispatch "
+        "ON ai_jobs(status, priority, available_at)"
+    )
+
+    # Existing plaintext keys are encrypted in place; already encrypted values are untouched.
+    if "api_configs" in existing_tables:
+        try:
+            from app.services.ai.secrets import encrypt_secret
+
+            for config_id, secret in cursor.execute(
+                "SELECT id, api_key_encrypted FROM api_configs"
+            ).fetchall():
+                if secret and not secret.startswith("enc:v1:"):
+                    cursor.execute(
+                        "UPDATE api_configs SET api_key_encrypted = ? WHERE id = ?",
+                        (encrypt_secret(secret), config_id),
+                    )
+            print("  ✓ API Key 已使用 APP_SECRET_KEY 加密")
+        except ImportError:
+            print("  ! 未找到加密依赖，API Key 暂未迁移")
 
     conn.commit()
     conn.close()

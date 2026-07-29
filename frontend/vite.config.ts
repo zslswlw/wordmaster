@@ -17,6 +17,11 @@ export default defineConfig(({ mode }) => ({
         target: 'http://localhost:8006',
         changeOrigin: true,
         secure: false
+      },
+      '/ai-media': {
+        target: 'http://localhost:8006',
+        changeOrigin: true,
+        secure: false
       }
     }
   } : undefined,

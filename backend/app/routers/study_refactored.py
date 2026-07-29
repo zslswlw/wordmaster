@@ -1,143 +1,155 @@
-"""
-统一的学习逻辑模块
-支持：普通学习、强化学习、复习 三种模式
-核心逻辑：
-1. 第1轮：学习全部单词
-2. 第2轮及以后：只学习上一轮的错误单词
-3. 如果某轮全部正确，完成学习
-4. 如果中途退出，下次继续当前轮次
-"""
+"""Pure study-round state engine shared by new, enhance, and review modes."""
 
-from typing import List, Set, Tuple, Optional
-from sqlalchemy.orm import Session
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional
+
+
+VALID_STUDY_TYPES = {"new", "enhance", "review"}
+
+
+@dataclass(frozen=True)
+class CanonicalAnswer:
+    word_id: int
+    round: int
+    correct: bool
+    record_id: int
+
+
+@dataclass(frozen=True)
+class StudyState:
+    current_round: int
+    target_word_ids: List[int]
+    answered_word_ids: List[int]
+    remaining_word_ids: List[int]
+    wrong_word_ids: List[int]
+    round_complete: bool
+    phase_complete: bool
+
+
+def _record_id(record: object, fallback: int) -> int:
+    value = getattr(record, "id", None)
+    return int(value) if value is not None else fallback
+
+
+def canonical_answers(records: Iterable[object]) -> Dict[tuple[int, int], CanonicalAnswer]:
+    """Keep the latest result for each round/word pair."""
+    latest: Dict[tuple[int, int], CanonicalAnswer] = {}
+    for index, record in enumerate(records, 1):
+        answer = CanonicalAnswer(
+            word_id=int(getattr(record, "word_id")),
+            round=int(getattr(record, "round")),
+            correct=bool(getattr(record, "correct")),
+            record_id=_record_id(record, index),
+        )
+        key = (answer.round, answer.word_id)
+        previous = latest.get(key)
+        if previous is None or answer.record_id > previous.record_id:
+            latest[key] = answer
+    return latest
+
+
+def _state_for_round(
+    round_number: int,
+    target_word_ids: List[int],
+    answers: Dict[tuple[int, int], CanonicalAnswer],
+) -> StudyState:
+    target_set = set(target_word_ids)
+    round_answers = {
+        word_id: answer
+        for (answer_round, word_id), answer in answers.items()
+        if answer_round == round_number and word_id in target_set
+    }
+    answered = [word_id for word_id in target_word_ids if word_id in round_answers]
+    remaining = [word_id for word_id in target_word_ids if word_id not in round_answers]
+    wrong = [
+        word_id
+        for word_id in target_word_ids
+        if word_id in round_answers and not round_answers[word_id].correct
+    ]
+    round_complete = bool(target_word_ids) and not remaining
+    return StudyState(
+        current_round=round_number,
+        target_word_ids=list(target_word_ids),
+        answered_word_ids=answered,
+        remaining_word_ids=remaining,
+        wrong_word_ids=wrong,
+        round_complete=round_complete,
+        phase_complete=round_complete and not wrong,
+    )
+
+
+def calculate_study_state(all_word_ids: Iterable[int], records: Iterable[object]) -> StudyState:
+    ordered_word_ids = list(dict.fromkeys(int(word_id) for word_id in all_word_ids))
+    if not ordered_word_ids:
+        return StudyState(1, [], [], [], [], False, False)
+
+    answers = canonical_answers(records)
+    target_word_ids = ordered_word_ids
+    round_number = 1
+
+    while True:
+        state = _state_for_round(round_number, target_word_ids, answers)
+        if not state.round_complete or state.phase_complete:
+            return state
+        target_word_ids = state.wrong_word_ids
+        round_number += 1
+
+
+def get_round_state(
+    all_word_ids: Iterable[int],
+    records: Iterable[object],
+    round_number: int,
+) -> Optional[StudyState]:
+    if round_number < 1:
+        return None
+
+    ordered_word_ids = list(dict.fromkeys(int(word_id) for word_id in all_word_ids))
+    if not ordered_word_ids:
+        return None
+
+    answers = canonical_answers(records)
+    target_word_ids = ordered_word_ids
+    for current_round in range(1, round_number + 1):
+        state = _state_for_round(current_round, target_word_ids, answers)
+        if current_round == round_number:
+            return state
+        if not state.round_complete or not state.wrong_word_ids:
+            return None
+        target_word_ids = state.wrong_word_ids
+    return None
+
+
+def summarize_rounds(all_word_ids: Iterable[int], records: Iterable[object]) -> dict[int, dict]:
+    ordered_word_ids = list(dict.fromkeys(int(word_id) for word_id in all_word_ids))
+    answers = canonical_answers(records)
+    result: dict[int, dict] = {}
+    target_word_ids = ordered_word_ids
+    round_number = 1
+
+    while target_word_ids:
+        state = _state_for_round(round_number, target_word_ids, answers)
+        result[round_number] = {
+            "correct": len(state.answered_word_ids) - len(state.wrong_word_ids),
+            "wrong": len(state.wrong_word_ids),
+            "total": len(state.answered_word_ids),
+            "expected": len(state.target_word_ids),
+            "remaining": len(state.remaining_word_ids),
+        }
+        if not state.round_complete or not state.wrong_word_ids:
+            break
+        target_word_ids = state.wrong_word_ids
+        round_number += 1
+
+    return result
 
 
 def get_study_words(
     all_word_ids: List[int],
     existing_records: list,
-    study_type: str
-) -> Tuple[List[int], int, bool]:
-    """
-    统一的学习逻辑函数
-    
-    Args:
-        all_word_ids: 学习组的所有单词ID
-        existing_records: 已有的学习记录
-        study_type: 学习类型 ('new', 'enhance', 'review')
-    
-    Returns:
-        study_word_ids: 本次需要学习的单词ID列表
-        current_round: 当前轮次
-        is_completed: 是否已完成学习
-    """
-    
-    # 获取最大轮次
-    max_round = 0
-    if existing_records:
-        max_round = max(r.round for r in existing_records)
-    
-    # 获取当前轮次的记录
-    current_round_records = [r for r in existing_records if r.round == max_round]
-    
-    # 获取当前轮次错误的单词ID
-    current_wrong_ids = set()
-    for record in current_round_records:
-        if not record.correct:
-            current_wrong_ids.add(record.word_id)
-    
-    # 确定当前轮次应该学习的单词列表
-    if max_round == 0:
-        # 全新开始：第1轮学习全部单词
-        target_word_ids = all_word_ids
-    elif max_round == 1:
-        # 第1轮进行中或刚完成：学习全部单词
-        target_word_ids = all_word_ids
-    else:
-        # 第2轮及以后：只学习上一轮的错误单词
-        prev_round = max_round - 1
-        prev_round_records = [r for r in existing_records if r.round == prev_round]
-        prev_wrong_ids = set()
-        for record in prev_round_records:
-            if not record.correct:
-                prev_wrong_ids.add(record.word_id)
-        target_word_ids = list(prev_wrong_ids) if prev_wrong_ids else []
-    
-    # 特殊处理：如果当前轮次是第2轮且没有任何记录，应该是从第1轮的错误单词开始
-    # 这种情况发生在第1轮刚完成，要进入第2轮时
-    if max_round == 1 and not current_round_records:
-        # 第1轮已完成，准备进入第2轮，应该学习第1轮的错误单词
-        target_word_ids = list(current_wrong_ids) if current_wrong_ids else []
-    
-    # 判断当前轮次是否已完成
-    is_current_round_complete = (
-        len(current_round_records) >= len(target_word_ids) and max_round > 0
-    )
-    
-    # 决策逻辑
-    if not is_current_round_complete and existing_records:
-        # 当前轮次未完成，继续当前轮次
-        studied_ids = set(r.word_id for r in current_round_records)
-        remaining_ids = [wid for wid in target_word_ids if wid not in studied_ids]
-        study_word_ids = remaining_ids if remaining_ids else target_word_ids
-        current_round = max_round
-        is_completed = False
-        
-    elif is_current_round_complete and current_wrong_ids:
-        # 当前轮次已完成但有错误，进入下一轮
-        study_word_ids = list(current_wrong_ids)
-        current_round = max_round + 1
-        is_completed = False
-        
-    elif is_current_round_complete and not current_wrong_ids:
-        # 当前轮次已完成且全部正确，完成学习
-        study_word_ids = []
-        current_round = max_round
-        is_completed = True
-        
-    else:
-        # 新开始
-        study_word_ids = all_word_ids
-        current_round = 1
-        is_completed = False
-    
-    return study_word_ids, current_round, is_completed
-
-
-def calculate_study_result(existing_records: list, all_word_ids: List[int]) -> dict:
-    """
-    计算学习结果统计
-    
-    Returns:
-        {
-            'total_words': 总单词数,
-            'studied_words': 已学习单词数,
-            'correct_count': 正确数,
-            'wrong_count': 错误数,
-            'current_round': 当前轮次,
-            'is_completed': 是否完成
-        }
-    """
-    if not existing_records:
-        return {
-            'total_words': len(all_word_ids),
-            'studied_words': 0,
-            'correct_count': 0,
-            'wrong_count': 0,
-            'current_round': 0,
-            'is_completed': False
-        }
-    
-    max_round = max(r.round for r in existing_records)
-    current_round_records = [r for r in existing_records if r.round == max_round]
-    
-    correct_count = sum(1 for r in current_round_records if r.correct)
-    wrong_count = sum(1 for r in current_round_records if not r.correct)
-    
-    return {
-        'total_words': len(all_word_ids),
-        'studied_words': len(current_round_records),
-        'correct_count': correct_count,
-        'wrong_count': wrong_count,
-        'current_round': max_round,
-        'is_completed': False  # 需要结合 get_study_words 的结果判断
-    }
+    study_type: str,
+) -> tuple[List[int], int, bool]:
+    """Compatibility wrapper for the original helper API."""
+    if study_type not in VALID_STUDY_TYPES:
+        raise ValueError(f"Unsupported study type: {study_type}")
+    state = calculate_study_state(all_word_ids, existing_records)
+    return state.remaining_word_ids, state.current_round, state.phase_complete

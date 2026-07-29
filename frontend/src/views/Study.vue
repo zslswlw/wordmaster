@@ -28,12 +28,12 @@
         <!-- 视觉模式：看图识词 -->
         <template v-if="visualMode && canUseVisual">
           <div class="visual-study-img-wrap">
-            <VisualWordCard :src="currentWord.image_url" :alt="currentWord.word" />
+            <VisualWordCard :src="learningContent.image_url" :alt="currentWord.word" />
           </div>
           <p class="visual-study-hint">看图拼写单词</p>
         </template>
         <template v-else>
-          <p class="meaning">{{ currentWord?.meaning }}</p>
+          <p class="meaning">{{ displayMeaning }}</p>
         </template>
         <p v-if="isStubborn" class="stubborn-badge">需强化 · 已错 {{ currentStubbornCount }} 次</p>
         <p class="phonetic" v-if="currentWord?.phonetic && showPhonetic">{{ currentWord.phonetic }}</p>
@@ -74,7 +74,7 @@
     <!-- 已提交：结果态 -->
     <main v-else class="study-main result-mode">
       <div class="word-zone dimmed">
-        <p class="meaning">{{ currentWord?.meaning }}</p>
+        <p class="meaning">{{ displayMeaning }}</p>
       </div>
 
       <div class="result-area">
@@ -102,28 +102,28 @@
           <p v-if="currentWord.example_l1" class="context-l1">{{ currentWord.example_l1 }}</p>
         </div>
 
-        <!-- L3 深度卡：答错后展示词根/记忆锚点 -->
-        <div v-if="!lastResult?.correct && (currentWord?.etymology || currentWord?.mnemonic)" class="deep-card">
-          <div v-if="currentWord.etymology" class="deep-section">
-            <p class="deep-label">词源</p>
-            <p class="deep-text">{{ currentWord.etymology }}</p>
-          </div>
-          <div v-if="featureFlags.mnemonic_enabled && currentWord.mnemonic" class="deep-section">
+        <div v-if="featureFlags.mnemonic_enabled && learningContent.memory_anchor" class="deep-card">
+          <div class="deep-section">
             <p class="deep-label">记忆锚点</p>
-            <p class="deep-text">{{ currentWord.mnemonic }}</p>
+            <p class="deep-text">{{ learningContent.memory_anchor }}</p>
           </div>
         </div>
 
-        <!-- 视觉词卡 -->
-        <VisualWordCard v-if="featureFlags.image_enabled && currentWord?.image_url" :src="currentWord.image_url" :alt="currentWord.word" />
+        <template v-if="featureFlags.image_enabled">
+          <VisualWordCard v-if="learningContent.image_url" :src="learningContent.image_url" :alt="currentWord.word" />
+          <div v-else class="memory-placeholder">
+            <el-icon :size="28"><Picture /></el-icon>
+            <span>图像正在后台准备</span>
+          </div>
+        </template>
 
-        <!-- AI 生图按钮 (顽固词/答错后) -->
-        <div v-if="featureFlags.image_enabled && !lastResult?.correct && isStubborn && !currentWord?.image_url && !generatedImageUrl" class="gen-image-section">
-          <el-button text type="primary" :loading="generatingImage" @click.stop="handleGenerateImage">
-            <el-icon><MagicStick /></el-icon> AI 生成视觉词卡
+        <div v-if="learningContent.bundle_id" class="resource-actions">
+          <span v-if="learningContent.feedback_status === 'pending'" class="feedback-pending">素材待更新</span>
+          <el-button v-else text size="small" @click.stop="openFeedback">
+            <el-icon><ChatLineRound /></el-icon>
+            反馈素材
           </el-button>
         </div>
-        <VisualWordCard v-if="generatedImageUrl" :src="generatedImageUrl" :alt="currentWord?.word" />
 
         <!-- 提示 -->
         <p class="next-hint">
@@ -145,6 +145,26 @@
       <SessionReport :errors="sessionErrors" @done="closeSessionReport" />
       <template #footer>
         <el-button type="primary" @click="closeSessionReport" class="dialog-btn">返回</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showFeedback" title="反馈记忆素材" :width="isMobile ? '90%' : '380px'" @click.stop>
+      <el-form label-position="top">
+        <el-form-item label="需要更新">
+          <el-segmented v-model="feedbackForm.component" :options="feedbackComponents" />
+        </el-form-item>
+        <el-form-item label="原因">
+          <el-select v-model="feedbackForm.reason" style="width: 100%">
+            <el-option v-for="reason in feedbackReasons" :key="reason" :label="reason" :value="reason" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="补充说明">
+          <el-input v-model="feedbackForm.detail" type="textarea" :rows="3" maxlength="500" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showFeedback = false">取消</el-button>
+        <el-button type="primary" :loading="submittingFeedback" @click="submitFeedback">提交</el-button>
       </template>
     </el-dialog>
 
@@ -194,7 +214,7 @@ import { studyAPI, aiAPI, settingsAPI } from '../api'
 import { useResponsive } from '../composables/useResponsive'
 import SessionReport from '../components/SessionReport.vue'
 import VisualWordCard from '../components/VisualWordCard.vue'
-import { ArrowLeft, VideoPlay, ChatDotRound, MagicStick, Picture } from '@element-plus/icons-vue'
+import { ArrowLeft, VideoPlay, ChatDotRound, ChatLineRound, Picture } from '@element-plus/icons-vue'
 
 defineOptions({ name: 'Study' })
 
@@ -235,8 +255,14 @@ const roundResultIconClass = ref('success')
 const nextStep = ref('')
 const showQuitConfirm = ref(false)
 const showSessionReport = ref(false)
-const generatingImage = ref(false)
-const generatedImageUrl = ref('')
+const showFeedback = ref(false)
+const submittingFeedback = ref(false)
+const feedbackComponents = [
+  { label: '图片', value: 'image' },
+  { label: '记忆点', value: 'memory_anchor' },
+]
+const feedbackReasons = ['联系不强', '词义不准', '记忆点牵强', '图片过于普通', '图片质量差', '内容不适', '其他说明']
+const feedbackForm = reactive({ component: 'image', reason: '联系不强', detail: '' })
 
 const studyType = ref('new')
 const planId = ref<number | null>(null)
@@ -269,17 +295,27 @@ const togglePhonetic = () => {
 const visualMode = ref(false)
 const hasVisual = computed(() => {
   const wordsList = enhanceMode.value ? enhanceWords.value : words.value
-  return wordsList.some((w: any) => w?.image_url)
+  return wordsList.some((w: any) => w?.learning_content?.image_url || w?.image_url)
 })
-const canUseVisual = computed(() => hasVisual.value && currentWord.value?.image_url)
-const toggleVisualMode = () => {
-  if (!hasVisual.value) { ElMessage.info('当前学习组没有视觉词卡，请先在设置中预处理'); return }
-  visualMode.value = !visualMode.value
-}
 
 const currentWord = computed(() => enhanceMode.value
   ? enhanceWords.value[enhanceIndex.value]
   : words.value[currentIndex.value])
+const learningContent = computed(() => currentWord.value?.learning_content || {
+  bundle_id: null,
+  display_meaning: currentWord.value?.meaning || '',
+  memory_anchor: currentWord.value?.mnemonic || null,
+  image_url: currentWord.value?.image_url || null,
+  narration_text: currentWord.value?.meaning || '',
+  narration_audio_url: currentWord.value?.context_audio || null,
+  feedback_status: 'none',
+})
+const displayMeaning = computed(() => learningContent.value.display_meaning || currentWord.value?.meaning || '')
+const canUseVisual = computed(() => hasVisual.value && learningContent.value.image_url)
+const toggleVisualMode = () => {
+  if (!hasVisual.value) { ElMessage.info('当前学习组的图像仍在后台准备'); return }
+  visualMode.value = !visualMode.value
+}
 
 const currentWordIndex = computed(() => (enhanceMode.value ? enhanceIndex.value : currentIndex.value) + 1)
 const totalWords = computed(() => enhanceMode.value ? enhanceWords.value.length : words.value.length)
@@ -298,49 +334,92 @@ class AudioManager {
   private cache = new Map<string, HTMLAudioElement>()
   private current: HTMLAudioElement | null = null
   private ttsTimer: number | null = null
+  private sequence = 0
+  private settlePending: ((value: boolean) => void) | null = null
 
   stop() {
+    this.sequence++
+    this.settlePending?.(false)
+    this.settlePending = null
     this.current?.pause(); this.current = null
     if ('speechSynthesis' in window) speechSynthesis.cancel()
     if (this.ttsTimer) { clearTimeout(this.ttsTimer); this.ttsTimer = null }
   }
 
-  async play(word: string) {
-    this.stop()
+  private async delay(ms: number, sequence: number) {
+    return new Promise<boolean>(resolve => {
+      this.settlePending = resolve
+      this.ttsTimer = window.setTimeout(() => {
+        this.settlePending = null
+        this.ttsTimer = null
+        resolve(sequence === this.sequence)
+      }, ms)
+    })
+  }
+
+  private async playElement(audio: HTMLAudioElement, sequence: number) {
+    this.current = audio
+    audio.currentTime = 0
+    return new Promise<boolean>(resolve => {
+      const finish = (played: boolean) => {
+        if (this.settlePending !== finish) return
+        this.settlePending = null
+        audio.onended = null
+        audio.onerror = null
+        resolve(played && sequence === this.sequence)
+      }
+      this.settlePending = finish
+      audio.onended = () => finish(true)
+      audio.onerror = () => finish(false)
+      audio.play().catch(() => finish(false))
+    })
+  }
+
+  private async speak(text: string, lang: string, rate: number, sequence: number) {
+    if (!('speechSynthesis' in window)) return false
+    return new Promise<boolean>(resolve => {
+      const utterance = new SpeechSynthesisUtterance(text)
+      const finish = (played: boolean) => {
+        if (this.settlePending !== finish) return
+        this.settlePending = null
+        resolve(played && sequence === this.sequence)
+      }
+      this.settlePending = finish
+      utterance.lang = lang
+      utterance.rate = rate
+      utterance.onend = () => finish(true)
+      utterance.onerror = () => finish(false)
+      speechSynthesis.speak(utterance)
+    })
+  }
+
+  async playEnglish(word: string, sequence: number) {
     if (this.cache.has(word)) {
-      const a = this.cache.get(word)!; a.currentTime = 0; this.current = a
-      try { await a.play() } catch { /* fall through to TTS */ }
-      return
+      const played = await this.playElement(this.cache.get(word)!, sequence)
+      if (played) return true
     }
     try {
       const a = new Audio(`/audio/${word[0].toLowerCase()}/${word.toLowerCase()}.mp3`)
       a.preload = 'auto'
       this.cache.set(word, a)
-      this.current = a
-      await a.play()
+      const played = await this.playElement(a, sequence)
+      if (played) return true
     } catch {
-      if ('speechSynthesis' in window) {
-        const u = new SpeechSynthesisUtterance(word); u.lang = 'en-US'; u.rate = 0.8; speechSynthesis.speak(u)
-      }
+      // Browser speech is the final English fallback.
     }
+    return this.speak(word, 'en-US', 0.8, sequence)
   }
 
-  async playWithMeaning(word: string, meaning: string, contextAudio?: string) {
+  async playWithMeaning(word: string, narration: string, narrationAudio?: string) {
     this.stop()
-    await this.play(word)
-    if (contextAudio) {
-      await new Promise(r => { this.ttsTimer = window.setTimeout(r, 800) })
-      try {
-        const a = new Audio(contextAudio)
-        this.current = a
-        await a.play()
-        return
-      } catch { /* fall through to TTS */ }
+    const sequence = this.sequence
+    await this.playEnglish(word, sequence)
+    if (sequence !== this.sequence || !await this.delay(350, sequence)) return
+    if (narrationAudio) {
+      const played = await this.playElement(new Audio(narrationAudio), sequence)
+      if (played) return
     }
-    await new Promise(r => { this.ttsTimer = window.setTimeout(r, 2000) })
-    if ('speechSynthesis' in window) {
-      const u = new SpeechSynthesisUtterance(meaning); u.lang = 'zh-CN'; u.rate = 1.0; speechSynthesis.speak(u)
-    }
+    await this.speak(narration, 'zh-CN', 1.0, sequence)
   }
 }
 
@@ -349,8 +428,14 @@ const audio = new AudioManager()
 const playPronunciation = async () => {
   if (!currentWord.value) return
   isPlaying.value = true
-  try { await audio.playWithMeaning(currentWord.value.word, currentWord.value.meaning, currentWord.value.context_audio) } catch {}
-  setTimeout(() => { isPlaying.value = false }, 3000)
+  try {
+    await audio.playWithMeaning(
+      currentWord.value.word,
+      learningContent.value.narration_text,
+      learningContent.value.narration_audio_url,
+    )
+  } catch {}
+  isPlaying.value = false
 }
 
 // --- 核心流程 ---
@@ -370,6 +455,13 @@ const handleSubmit = async () => {
     })
     lastResult.value = { correct: res.data.correct, correct_answer: res.data.correct_answer, user_answer: userInput.value.trim() }
     answerSubmitted.value = true
+    aiAPI.recordExposure({
+      word_id: currentWord.value.id,
+      bundle_id: learningContent.value.bundle_id,
+      group_id: groupId.value,
+      plan_id: planId.value || undefined,
+      study_type: studyType.value,
+    }).catch(() => {})
     if (!lastResult.value.correct) {
       const wid = currentWord.value.id
       stubbornCount[wid] = (stubbornCount[wid] || 0) + 1
@@ -377,7 +469,7 @@ const handleSubmit = async () => {
         word: currentWord.value.word,
         correct: res.data.correct_answer,
         user: userInput.value.trim(),
-        meaning: currentWord.value.meaning
+        meaning: displayMeaning.value
       })
     }
     if (lastResult.value.correct) { setTimeout(() => playPronunciation(), 1000) }
@@ -385,27 +477,35 @@ const handleSubmit = async () => {
   finally { submitting.value = false }
 }
 
-const handleGenerateImage = async () => {
-  if (!currentWord.value) return
-  generatingImage.value = true
+const openFeedback = () => {
+  feedbackForm.component = learningContent.value.image_url ? 'image' : 'memory_anchor'
+  feedbackForm.reason = '联系不强'
+  feedbackForm.detail = ''
+  showFeedback.value = true
+}
+
+const submitFeedback = async () => {
+  if (!currentWord.value || !learningContent.value.bundle_id) return
+  submittingFeedback.value = true
   try {
-    const { data } = await aiAPI.generateImage(currentWord.value.id)
-    generatedImageUrl.value = data.image_url
-    // 更新本地单词数据，使视觉模式可立即使用
-    if (currentWord.value) {
-      currentWord.value.image_url = data.image_url
-    }
+    await aiAPI.submitFeedback({
+      word_id: currentWord.value.id,
+      bundle_id: learningContent.value.bundle_id,
+      ...feedbackForm,
+    })
+    currentWord.value.learning_content.feedback_status = 'pending'
+    showFeedback.value = false
+    ElMessage.success('已提交，替代版完成前继续使用当前素材')
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.detail || '图片生成失败，请检查 MiniMax 配置')
+    ElMessage.error(e.response?.data?.detail || '反馈提交失败')
   } finally {
-    generatingImage.value = false
+    submittingFeedback.value = false
   }
 }
 
 const handleNext = () => {
   audio.stop(); isPlaying.value = false
   userInput.value = ''; answerSubmitted.value = false; lastResult.value = null
-  generatedImageUrl.value = ''; generatingImage.value = false
   if (enhanceMode.value) {
     enhanceIndex.value++
     enhanceIndex.value >= enhanceWords.value.length ? checkEnhanceResult() : (focusInput(), setTimeout(() => playPronunciation(), 500))
@@ -421,7 +521,7 @@ const checkRoundResult = async () => {
     const res = await studyAPI.getRoundStats(groupId.value, currentRound.value, studyType.value, planId.value || undefined)
     const d = res.data; const s = d.current_round_stats || { correct: 0, wrong: 0, total: 0 }
     roundStats.value = { correct: s.correct, wrong: s.wrong, total: s.total, totalWords: d.total_words }
-    if (s.wrong === 0) {
+    if (s.wrong === 0 && (s.remaining || 0) === 0) {
       if (studyType.value === 'review') {
         roundResultTitle.value = '复习完成!'; roundMessage.value = `全部答对！复习完成！`; nextStep.value = 'finish'
       } else { roundResultTitle.value = '本轮完成!'; roundMessage.value = `全部答对！`; nextStep.value = 'enhance' }
@@ -439,7 +539,7 @@ const checkEnhanceResult = async () => {
     const res = await studyAPI.getEnhanceStats(groupId.value, currentRound.value)
     const d = res.data; const s = d.current_round_stats || { correct: 0, wrong: 0, total: 0 }
     roundStats.value = { correct: s.correct, wrong: s.wrong, total: s.total, totalWords: d.total_words }
-    if (s.wrong === 0) {
+    if (s.wrong === 0 && (s.remaining || 0) === 0) {
       roundResultTitle.value = '学习完成!'; roundMessage.value = `全部答对！学习完成！`; nextStep.value = 'finish'
       roundResultIcon.value = 'CircleCheck'; roundResultIconClass.value = 'success'
     } else {
@@ -489,7 +589,16 @@ const startEnhance = async () => {
 const finishStudy = async () => {
   showRoundResult.value = false
   try {
-    await studyAPI.completeStudy(groupId.value, enhanceMode.value, studyType.value, planId.value ?? undefined)
+    const { data } = await studyAPI.completeStudy(groupId.value, enhanceMode.value, studyType.value, planId.value ?? undefined)
+    if (data.next_step === 'enhance') {
+      await startEnhance()
+      return
+    }
+    if (data.next_step === 'continue') {
+      ElMessage.warning(`本轮还有 ${data.remaining_count || 0} 个单词未完成`)
+      await continueStudy()
+      return
+    }
     showSessionReport.value = true
   } catch { ElMessage.error('保存失败') }
 }
@@ -513,6 +622,9 @@ const initStudy = async (force = false) => {
   const id = route.params.id; const qId = route.query.groupId
   groupId.value = (id && !isNaN(Number(id))) ? Number(id) : (qId && !isNaN(Number(qId)) ? Number(qId) : 0)
   if (!groupId.value) { ElMessage.error('无效的学习组ID'); router.push('/groups'); return }
+  studyType.value = 'new'
+  planId.value = null
+  enhanceMode.value = false
 
   try {
     const qPlanId = route.query.planId; const qIsReview = route.query.isReview === 'true'; let isReview = false
@@ -520,7 +632,11 @@ const initStudy = async (force = false) => {
     else { const rid = localStorage.getItem('reviewPlanId'); if (rid) { studyType.value = 'review'; planId.value = Number(rid); isReview = true; localStorage.removeItem('reviewPlanId') } }
 
     let res = await studyAPI.startStudy(groupId.value, isReview, false, planId.value || undefined)
-    if (res.data.is_completed) { await finishStudy(); return }
+    if (res.data.is_completed) {
+      if (isReview) await finishStudy()
+      else await startEnhance()
+      return
+    }
     let isEnhanceMode = false
     if (res.data.word_ids.length === 0 && !isReview) {
       res = await studyAPI.startStudy(groupId.value, false, true, planId.value || undefined)
@@ -576,6 +692,7 @@ watch(getInitKey, (newKey, oldKey) => {
     // 显式重置状态再重跑 init
     currentIndex.value = 0; words.value = []; wordIds.value = []
     enhanceIndex.value = 0; enhanceWords.value = []; enhanceWordIds.value = []
+    enhanceMode.value = false; studyType.value = 'new'; planId.value = null
     userInput.value = ''; answerSubmitted.value = false; lastResult.value = null
     sessionErrors.value = []; Object.keys(stubbornCount).forEach(k => delete stubbornCount[Number(k)])
     showRoundResult.value = false; showSessionReport.value = false
@@ -808,6 +925,13 @@ watch(userInput, () => { if (!answerSubmitted.value) focusInput() })
   gap: 24px;
 }
 
+.result-area {
+  width: min(100%, 440px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .word-zone.dimmed .meaning {
   color: var(--color-text-muted);
   font-size: 1.25rem;
@@ -907,8 +1031,32 @@ watch(userInput, () => { if (!answerSubmitted.value) focusInput() })
   max-width: 280px;
 }
 
-.gen-image-section {
-  margin-top: 12px;
+.memory-placeholder {
+  width: min(280px, 72vw);
+  aspect-ratio: 1 / 1;
+  margin-top: 16px;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-muted);
+  color: var(--color-text-light);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 0.75rem;
+}
+
+.resource-actions {
+  min-height: 32px;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+}
+
+.feedback-pending {
+  color: var(--color-warning);
+  font-size: 0.75rem;
 }
 
 .next-hint {

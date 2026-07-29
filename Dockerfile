@@ -23,8 +23,9 @@ RUN chmod +x /app/entrypoint.sh
 
 COPY --from=frontend-build /frontend/dist /app/static
 
-RUN mkdir -p /app/data /app/ai_images
+RUN mkdir -p /app/data/ai-media /app/ai_images
 ENV DATABASE_URL=sqlite:////app/data/wordmaster.db
+ENV AI_MEDIA_DIR=/app/data/ai-media
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \

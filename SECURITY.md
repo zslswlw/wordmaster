@@ -87,9 +87,12 @@ netstat -tlnp | grep 5713
 ```bash
 # 后端 .env
 ENV=production
-SECRET_KEY=your-secret-key-here
+APP_SECRET_KEY=replace-with-openssl-rand-hex-32-output
 DATABASE_URL=sqlite:///./wordmaster.db
 ```
+
+`APP_SECRET_KEY` 同时用于登录令牌签名和 AI API Key 加密。生产部署必须
+使用随机值，并在后续升级与数据恢复时保持不变。
 
 ## 常见问题
 

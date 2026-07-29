@@ -1,5 +1,6 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
+from pydantic import Field
 from datetime import datetime, date
 
 
@@ -75,8 +76,8 @@ class StudyCheckRequest(BaseModel):
     group_id: int
     word_id: int
     user_input: str
-    round: int
-    study_type: str = "new"  # 'new' 或 'review'
+    round: int = Field(ge=1)
+    study_type: Literal["new", "enhance", "review"] = "new"
     plan_id: Optional[int] = None  # 复习计划ID
 
 

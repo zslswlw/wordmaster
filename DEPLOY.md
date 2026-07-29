@@ -7,9 +7,13 @@
 ```bash
 cd /opt/wordmaster
 git pull
+printf 'APP_SECRET_KEY=%s\n' "$(openssl rand -hex 32)" > .env
 docker compose down
 docker compose up -d --build
 ```
+
+首次部署时生成一次 `.env` 即可。升级已有部署时必须保留原来的
+`APP_SECRET_KEY`，否则已经加密保存的 AI API Key 将无法解密。
 
 访问 `http://服务器IP`（compose.yaml 已映射 80:8000，无需加端口号）。
 
@@ -24,7 +28,8 @@ docker compose logs --tail=20            # 看日志
 ### 数据持久化
 
 - 数据库：`wordmaster_data` volume → `/app/data/wordmaster.db`
-- AI 图片：`wordmaster_images` volume → `/app/ai_images/`
+- AI 图像和中文播报：`wordmaster_data` volume → `/app/data/ai-media/`
+- 旧版 AI 图片：`wordmaster_images` volume → `/app/ai_images/`，迁移兼容使用
 
 ### 端口
 

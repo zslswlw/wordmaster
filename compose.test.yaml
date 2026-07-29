@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wordmaster-test
+    ports:
+      - "8081:8000"
+    environment:
+      - ENV=test
+      - APP_TIMEZONE=Asia/Shanghai
+      - DATABASE_URL=sqlite:////tmp/wordmaster-test.db
+      - AI_MEDIA_DIR=/tmp/wordmaster-ai-media
+      - AI_WORKER_ENABLED=false
+      - TEST_RANDOM_SEED=0
+    restart: "no"

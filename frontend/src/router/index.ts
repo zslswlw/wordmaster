@@ -8,6 +8,7 @@ import Groups from '../views/Groups.vue'
 import Study from '../views/Study.vue'
 import Review from '../views/Review.vue'
 import Backup from '../views/Backup.vue'
+import TestLab from '../views/TestLab.vue'
 
 const routes = [
   {
@@ -51,6 +52,12 @@ const routes = [
         name: 'Backup',
         component: Backup,
         meta: { title: '数据备份', adminOnly: true }
+      },
+      {
+        path: 'test-lab',
+        name: 'TestLab',
+        component: TestLab,
+        meta: { title: '时间实验室' }
       },
     ]
   },

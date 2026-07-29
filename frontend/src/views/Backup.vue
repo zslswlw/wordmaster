@@ -5,14 +5,14 @@
     <div class="two-col">
       <div class="card">
         <h3>导出备份</h3>
-        <p>将学习数据导出为JSON文件，包含词库、学习记录和复习计划。</p>
+        <p>导出完整 ZIP，包含学习进度、AI 记忆版本、图片、音频和校验清单。</p>
         <el-button size="large" :loading="backingUp" @click="handleBackup">导出备份</el-button>
       </div>
 
       <div class="card">
         <h3>恢复数据</h3>
         <p>从备份文件恢复。此操作将覆盖当前所有数据。</p>
-        <el-upload ref="uploadRef" :auto-upload="false" :limit="1" accept=".json" :on-change="onFileChange" :on-remove="onFileRemove" :file-list="fileList" class="upload">
+        <el-upload ref="uploadRef" :auto-upload="false" :limit="1" accept=".zip,.json" :on-change="onFileChange" :on-remove="onFileRemove" :file-list="fileList" class="upload">
           <el-button size="large">选择文件</el-button>
         </el-upload>
         <el-button v-if="selectedFile" type="danger" size="large" :loading="restoring" @click="showRestoreConfirm = true" class="restore-btn">确认恢复</el-button>
@@ -22,7 +22,7 @@
     <div class="notes">
       <h4>备份说明</h4>
       <ul>
-        <li>备份内容：所有词库、学习组、学习记录、复习计划</li>
+        <li>备份内容：词库、学习进度、记忆包版本、图片、中文播报和待处理反馈</li>
         <li>建议定期备份，特别是完成一批单词后</li>
         <li>恢复会覆盖当前所有数据，请谨慎操作</li>
       </ul>
@@ -53,10 +53,9 @@ const isMobile = ref(window.innerWidth <= 768)
 const handleBackup = async () => {
   backingUp.value = true
   try {
-    const { data } = await backupAPI.exportData()
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `wordmaster_${new Date().toISOString().slice(0,10)}.json`
+    const { data } = await backupAPI.exportFull()
+    const url = URL.createObjectURL(data)
+    const a = document.createElement('a'); a.href = url; a.download = `wordmaster_${new Date().toISOString().slice(0,10)}.zip`
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
     ElMessage.success('备份成功')
   } catch { ElMessage.error('备份失败') }
@@ -69,17 +68,12 @@ const onFileRemove = () => { selectedFile.value = null; fileList.value = [] }
 const confirmRestore = async () => {
   if (!selectedFile.value) return
   restoring.value = true
-  const reader = new FileReader()
-  reader.onload = async (e) => {
-    try {
-      const data = JSON.parse(e.target?.result as string)
-      await backupAPI.import(data)
-      ElMessage.success('恢复成功'); showRestoreConfirm.value = false
-      selectedFile.value = null; fileList.value = []
-    } catch { ElMessage.error('恢复失败，请检查文件格式') }
-    finally { restoring.value = false }
-  }
-  reader.readAsText(selectedFile.value)
+  try {
+    await backupAPI.importFile(selectedFile.value)
+    ElMessage.success('恢复成功'); showRestoreConfirm.value = false
+    selectedFile.value = null; fileList.value = []
+  } catch { ElMessage.error('恢复失败，请检查备份文件和校验清单') }
+  finally { restoring.value = false }
 }
 </script>
 

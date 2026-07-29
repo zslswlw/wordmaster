@@ -21,6 +21,8 @@
             <span class="plan-name">{{ p.group_name }}</span>
           </div>
           <div class="plan-right">
+            <el-tag v-if="p.is_overdue" type="danger" size="small">逾期 {{ p.overdue_days }} 天</el-tag>
+            <el-tag v-else-if="p.blocked_by_plan_id" type="info" size="small">等待前序轮次</el-tag>
             <span class="plan-date">{{ fmt(p.review_date) }}</span>
             <el-button type="primary" size="small" :disabled="!p.can_review" @click="startReview(p)">开始</el-button>
           </div>
@@ -43,7 +45,7 @@
             </div>
             <div class="plan-right">
               <el-tag :type="tagType(p)" size="small">{{ tagText(p) }}</el-tag>
-              <el-button type="primary" size="small" :disabled="!p.can_review" @click="startReview(p)">{{ p.can_review ? '复习' : '锁定' }}</el-button>
+              <el-button type="primary" size="small" :disabled="!p.can_review" @click="startReview(p)">{{ p.can_review ? '复习' : p.blocked_by_plan_id ? '待前序' : '锁定' }}</el-button>
             </div>
           </div>
         </div>
@@ -63,7 +65,7 @@ const tab = ref('today')
 const todayPlans = ref<any[]>([])
 const allPlans = ref<any[]>([])
 
-interface Plan { plan_id: number; group_id: number; group_name: string; bank_name: string; review_round: number; review_date: string; start_seq: number; end_seq: number; status: string; is_today: boolean; is_overdue: boolean; is_future: boolean; can_review: boolean }
+interface Plan { plan_id: number; group_id: number; group_name: string; bank_name: string; review_round: number; review_date: string; start_seq: number; end_seq: number; status: string; is_today: boolean; is_overdue: boolean; overdue_days: number; is_future: boolean; can_review: boolean; blocked_by_plan_id: number | null }
 
 const groupedPlans = computed(() => {
   const m = new Map<string, Plan[]>()
@@ -80,9 +82,12 @@ const startReview = (plan: Plan) => {
 }
 
 const tagType = (p: Plan) => p.status === 'completed' ? 'success' : p.is_overdue ? 'danger' : p.is_today ? 'warning' : 'info'
-const tagText = (p: Plan) => p.status === 'completed' ? '已完成' : p.is_overdue ? '逾期' : p.is_today ? '今日' : '等待'
+const tagText = (p: Plan) => p.status === 'completed' ? '已完成' : p.is_overdue ? `逾期 ${p.overdue_days} 天` : p.blocked_by_plan_id ? '等待前序轮次' : p.is_today ? '今日' : '等待'
 
-const fmt = (d: string) => { const dt = new Date(d); return `${dt.getMonth() + 1}月${dt.getDate()}日` }
+const fmt = (d: string) => {
+  const [, month, day] = d.split('-').map(Number)
+  return `${month}月${day}日`
+}
 
 onMounted(async () => {
   try { const r = await reviewAPI.getTodayPlans(); todayPlans.value = Array.isArray(r.data) ? r.data : [] } catch { todayPlans.value = [] }

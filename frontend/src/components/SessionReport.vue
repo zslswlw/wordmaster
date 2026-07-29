@@ -22,7 +22,7 @@
     <!-- AI 错题分析 -->
     <div v-if="analysis" class="analysis-section">
       <h4>AI 错题分析</h4>
-      <div class="analysis-content" v-html="renderedAnalysis"></div>
+      <div class="analysis-content">{{ renderedAnalysis }}</div>
     </div>
     <div v-else-if="analyzing" class="analysis-loading">
       <el-icon class="is-loading"><Loading /></el-icon>
@@ -72,7 +72,7 @@ const story = ref('')
 const storyFailed = ref(false)
 
 const renderedAnalysis = computed(() => {
-  return analysis.value.replace(/\n/g, '<br>')
+  return analysis.value
 })
 
 onMounted(async () => {
@@ -166,6 +166,7 @@ const runStory = async () => {
 
 .analysis-content {
   font-size: 0.875rem; color: var(--color-text-secondary); line-height: 1.7;
+  white-space: pre-line;
   padding: 12px 16px;
   background: rgba(var(--color-primary-rgb), 0.03);
   border: 1px solid rgba(var(--color-primary-rgb), 0.08);

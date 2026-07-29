@@ -8,7 +8,10 @@ services:
       - "80:8000"
     environment:
       - ENV=production
+      - APP_TIMEZONE=Asia/Shanghai
       - DATABASE_URL=sqlite:////app/data/wordmaster.db
+      - AI_MEDIA_DIR=/app/data/ai-media
+      - APP_SECRET_KEY=${APP_SECRET_KEY:?请先在 .env 中设置 APP_SECRET_KEY}
     volumes:
       - wordmaster_data:/app/data
       - wordmaster_images:/app/ai_images

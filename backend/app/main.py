@@ -1,16 +1,70 @@
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .routers import auth, banks, groups, study, review, backup, audio, settings, ai
+ENV = os.getenv("ENV", "development")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./wordmaster.db")
 
-app = FastAPI(title="WordMaster API", description="背单词系统后端API")
+if ENV == "test":
+    safe_test_database = (
+        DATABASE_URL == "sqlite:///:memory:"
+        or (
+            DATABASE_URL.startswith("sqlite:///")
+            and any(marker in DATABASE_URL.lower() for marker in ("test", "/tmp/", "/private/tmp/"))
+        )
+    )
+    if not safe_test_database:
+        raise RuntimeError("Test mode requires an isolated SQLite test database")
 
-import os
+from .clock import enable_test_clock, get_clock
+from .routers import (
+    ai,
+    ai_evolution,
+    audio,
+    auth,
+    backup,
+    banks,
+    groups,
+    review,
+    settings,
+    study,
+)
+from .models import SessionLocal
+from .services.ai.worker import media_root, start_silent_worker, stop_silent_worker
+from .services.learning_content import backfill_legacy_memory
+
+if ENV == "test":
+    from .routers import testing
+
+    initial_time = os.getenv("TEST_NOW")
+    enable_test_clock(datetime.fromisoformat(initial_time) if initial_time else None)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if ENV != "test":
+        with SessionLocal() as db:
+            backfill_legacy_memory(db)
+        if os.getenv("AI_WORKER_ENABLED", "true").lower() == "true":
+            start_silent_worker(SessionLocal)
+    try:
+        yield
+    finally:
+        await stop_silent_worker()
+
+
+app = FastAPI(
+    title="WordMaster API",
+    description="背单词系统后端API",
+    lifespan=lifespan,
+)
 
 # 根据环境设置允许的域名
-ENV = os.getenv("ENV", "development")
 if ENV == "production":
     allow_origins = [
         "http://localhost",
@@ -36,17 +90,31 @@ app.include_router(backup.router)
 app.include_router(audio.router)
 app.include_router(settings.router)
 app.include_router(ai.router)
+app.include_router(ai_evolution.router)
+if ENV == "test":
+    app.include_router(testing.router)
 
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "healthy"}
+    payload = {"status": "healthy", "test_mode": ENV == "test"}
+    if ENV == "test":
+        clock = get_clock()
+        payload.update({
+            "effective_time": clock.now().isoformat(),
+            "timezone": clock.timezone_name,
+        })
+    return payload
 
 
 # AI 生成图片静态目录
 AI_IMAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "ai_images")
 os.makedirs(AI_IMAGES_DIR, exist_ok=True)
 app.mount("/ai-images", StaticFiles(directory=AI_IMAGES_DIR), name="ai_images")
+
+AI_MEDIA_DIR = media_root()
+AI_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/ai-media", StaticFiles(directory=AI_MEDIA_DIR), name="ai_media")
 
 # 前端静态文件（JS/CSS/图片/音频等）
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "static")

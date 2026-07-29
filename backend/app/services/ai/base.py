@@ -14,7 +14,24 @@ class RateLimitError(Exception):
 
 
 class ProviderError(Exception):
-    """Provider 通用错误 (非速率限制类)."""
+    """Provider error that must not be blindly retried."""
+
+    def __init__(self, message: str, code: Optional[str] = None):
+        super().__init__(message)
+        self.code = code
+
+
+class QuotaExhaustedError(ProviderError):
+    """The token plan window is exhausted until the provider resets it."""
+
+    def __init__(
+        self,
+        message: str,
+        code: Optional[str] = "2056",
+        reset_at: Optional[str] = None,
+    ):
+        super().__init__(message, code=code)
+        self.reset_at = reset_at
 
 
 @dataclass

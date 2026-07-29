@@ -1,4 +1,3 @@
-import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 import csv
@@ -7,14 +6,9 @@ import io
 from ..models import get_db, User, WordBank, Word
 from ..schemas import WordBankCreate, WordBankResponse, WordResponse
 from ..auth import get_current_user, get_admin_user
+from ..services.learning_content import seed_bank_evolution
 
 router = APIRouter(prefix="/api/banks", tags=["word_banks"])
-
-
-async def _trigger_pipeline(bank_id: int):
-    """词库导入后在后台自动运行完整预处理流水线"""
-    from .ai import _run_full_pipeline
-    await _run_full_pipeline(bank_id)
 
 
 @router.get("", response_model=list[WordBankResponse])
@@ -77,7 +71,7 @@ async def import_bank(
         db.commit()
         db.refresh(bank)
 
-        asyncio.create_task(_trigger_pipeline(bank.id))
+        seed_bank_evolution(db, bank.id, priority=100)
 
         return bank
     except HTTPException:

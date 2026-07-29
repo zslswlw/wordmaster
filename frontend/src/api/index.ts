@@ -42,6 +42,10 @@ export const authAPI = {
   me: () => api.get('/auth/me')
 }
 
+export const systemAPI = {
+  health: () => api.get('/health')
+}
+
 export const bankAPI = {
   getAll: () => api.get('/banks'),
   upload: (file: File, name: string) => {
@@ -102,16 +106,26 @@ export const reviewAPI = {
   completeReview: (planId: number) => api.post(`/review/complete/${planId}`)
 }
 
+export const testAPI = {
+  getClock: () => api.get('/test/clock'),
+  setClock: (now: string) => api.put('/test/clock', { now }),
+  advanceClock: (days: number = 0, minutes: number = 0) =>
+    api.post('/test/clock/advance', { days, minutes }),
+  resetClock: () => api.delete('/test/clock'),
+  loadScenario: (scenario: 'fresh' | 'partial-round' | 'completed-day0' | 'overdue-backlog' | 'ten-word-review') =>
+    api.post(`/test/scenarios/${scenario}`)
+}
+
 export const backupAPI = {
   export: () => api.post('/backup/export'),
   exportData: () => api.post('/backup/export'),
-  import: (file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
-    return api.post('/backup/import', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    })
-  }
+  exportFull: () => api.post('/backup/export-full', undefined, { responseType: 'blob' }),
+  import: (data: any) => api.post('/backup/import', data),
+  importFile: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post('/backup/import', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
 }
 
 export const settingsAPI = {
@@ -137,4 +151,20 @@ export const aiAPI = {
   analyzeErrors: (errors: Array<{ word: string; correct: string; user: string; meaning?: string }>) => api.post('/ai/analyze-errors', { errors }),
   generateStory: (words: string[]) => api.post('/ai/story', { words }),
   distinguish: (word1: string, word2: string, meaning1?: string, meaning2?: string) => api.post('/ai/distinguish', { word1, meaning1: meaning1 || '', word2, meaning2: meaning2 || '' }),
+  submitFeedback: (data: { word_id: number; bundle_id?: number; component: string; reason: string; detail?: string }) =>
+    api.post('/ai/evolution/feedback', data),
+  feedback: (status?: string) => api.get('/ai/evolution/feedback', { params: { status } }),
+  wordVersions: (wordId: number) => api.get(`/ai/evolution/words/${wordId}/versions`),
+  recordExposure: (data: { word_id: number; bundle_id?: number; group_id?: number; plan_id?: number; study_type?: string }) =>
+    api.post('/ai/evolution/exposures', data),
+  bankCoverage: (bankId: number) => api.get(`/ai/evolution/banks/${bankId}/coverage`),
+  seedBank: (bankId: number) => api.post(`/ai/evolution/banks/${bankId}/seed`),
+  quota: () => api.get('/ai/evolution/quota'),
+  jobs: (status?: string) => api.get('/ai/evolution/jobs', { params: { status } }),
+  worker: () => api.get('/ai/evolution/worker'),
+  updateWorker: (data: any) => api.put('/ai/evolution/worker', data),
+  regenerateWord: (wordId: number) => api.post(`/ai/evolution/words/${wordId}/regenerate`),
+  editBundle: (bundleId: number, data: any) => api.put(`/ai/evolution/bundles/${bundleId}`, data),
+  activateBundle: (wordId: number, bundleId: number) => api.post(`/ai/evolution/words/${wordId}/activate/${bundleId}`),
+  rollbackBundle: (wordId: number, bundleId: number) => api.post(`/ai/evolution/words/${wordId}/rollback/${bundleId}`),
 }

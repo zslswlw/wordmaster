@@ -1,3 +1,5 @@
+import os
+
 from .models import get_db
 from fastapi import Depends
 from sqlalchemy.orm import Session
@@ -7,7 +9,10 @@ from datetime import datetime, timedelta
 from fastapi import HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-SECRET_KEY = "wordmaster-secret-key-change-in-production"
+SECRET_KEY = os.getenv(
+    "APP_SECRET_KEY",
+    "wordmaster-secret-key-change-in-production",
+)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 

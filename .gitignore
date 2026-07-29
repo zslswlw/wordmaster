@@ -8,6 +8,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 *.egg-info/
 dist/
@@ -73,3 +74,4 @@ desktop.ini
 
 # AI generated images (not source code)
 ai_images/
+backend/data/ai-media/
