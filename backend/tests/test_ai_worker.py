@@ -211,3 +211,64 @@ def test_quota_reserve_stops_normal_job_without_consuming_attempt(api):
     assert job.attempts == 0
     assert job.last_error_code == "quota_reserve"
     session.close()
+
+
+def test_running_job_recovers_after_restart_and_status_survives_refresh(api):
+    session = api["session"]()
+    bank = models.WordBank(name="resume", user_id=api["user_id"], word_count=1)
+    session.add(bank)
+    session.flush()
+    word = models.Word(
+        bank_id=bank.id,
+        seq_num=1,
+        word="resume",
+        phonetic="",
+        meaning="v. 继续",
+    )
+    session.add(word)
+    session.flush()
+    seed_word_evolution(session, word)
+    session.commit()
+    job = session.query(models.AiJob).filter_by(kind="bundle_text").one()
+    job.status = "running"
+    job.attempts = 1
+    session.commit()
+    bank_id, job_id = bank.id, job.id
+    session.close()
+
+    first = api["client"].get(
+        f"/api/ai/evolution/banks/{bank_id}/coverage",
+        headers=api["headers"],
+    )
+    second = api["client"].get(
+        f"/api/ai/evolution/banks/{bank_id}/coverage",
+        headers=api["headers"],
+    )
+
+    assert first.status_code == 200
+    assert first.json()["queue"]["state"] == "running"
+    assert first.json()["queue"]["current_job"]["id"] == job_id
+    assert second.json()["queue"] == first.json()["queue"]
+
+    session = api["session"]()
+    processor = AiJobProcessor(session)
+    assert processor.recover_interrupted() == 1
+    recovered = session.get(models.AiJob, job_id)
+    assert recovered.status == "pending"
+    assert recovered.attempts == 1
+    assert recovered.last_error_message == "应用重启后恢复"
+    session.close()
+
+    resumed = api["client"].get(
+        f"/api/ai/evolution/banks/{bank_id}/coverage",
+        headers=api["headers"],
+    )
+    worker = api["client"].get(
+        "/api/ai/evolution/worker",
+        headers=api["headers"],
+    )
+
+    assert resumed.json()["queue"]["state"] == "queued"
+    assert resumed.json()["queue"]["active_jobs"] == 1
+    assert worker.json()["state"] == "queued"
+    assert worker.json()["queue"]["next_job"]["id"] == job_id

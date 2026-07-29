@@ -109,19 +109,27 @@
       <div class="worker-panel">
         <div class="worker-stat">
           <span>运行状态</span>
-          <strong>{{ worker.paused ? '已暂停' : '运行中' }}</strong>
+          <strong>{{ workerStateText() }}</strong>
         </div>
         <div class="worker-stat">
           <span>MiniMax 剩余</span>
           <strong>{{ quota.remaining_percent == null ? '待检查' : `${quota.remaining_percent}%` }}</strong>
         </div>
         <div class="worker-stat">
-          <span>待处理任务</span>
-          <strong>{{ jobs.pending || 0 }}</strong>
+          <span>处理中 / 等待</span>
+          <strong>{{ jobs.running || 0 }} / {{ jobs.pending || 0 }}</strong>
+        </div>
+        <div class="worker-stat">
+          <span>当前任务</span>
+          <strong>{{ currentJobText() }}</strong>
         </div>
         <el-button :type="worker.paused ? 'primary' : 'default'" @click="toggleWorker">
           {{ worker.paused ? '恢复' : '暂停' }}
         </el-button>
+      </div>
+      <div class="worker-meta">
+        <span>最近活动：{{ lastActivityText() }}</span>
+        <span v-if="jobs.failed">失败待检查：{{ jobs.failed }}</span>
       </div>
       <div class="reserve-row">
         <span>普通任务保留额度</span>
@@ -156,7 +164,16 @@
             <span class="status-text">{{ coverage[bank.id]?.complete_ready || 0 }}/{{ coverage[bank.id]?.total || bank.word_count }}</span>
           </div>
         </div>
-        <el-button v-if="isAdmin" size="small" text :loading="reprocessingBank[bank.id]" @click="reprocessBank(bank.id)">补全</el-button>
+        <el-button
+          v-if="isAdmin"
+          size="small"
+          text
+          :loading="reprocessingBank[bank.id] || bankIsProcessing(bank.id)"
+          :disabled="bankIsProcessing(bank.id)"
+          @click="reprocessBank(bank.id)"
+        >
+          {{ bankActionText(bank.id) }}
+        </el-button>
       </div>
     </div>
 
@@ -261,11 +278,55 @@ const quota = reactive<{ remaining_percent: number | null; status: string }>({ r
 const jobs = reactive<Record<string, number>>({})
 const worker = reactive({
   paused: false,
+  state: 'idle',
   quota_reserve_percent: 30,
   feedback_reserve_percent: 20,
   priority_bank_id: null as number | null,
+  queue: null as any,
 })
 let pollTimer: ReturnType<typeof setInterval> | null = null
+
+const jobKindText: Record<string, string> = {
+  bundle_text: '整理记忆方案',
+  bundle_refresh: '升级记忆方案',
+  feedback_bundle: '处理用户反馈',
+  image: '生成图片',
+  audio: '生成播报',
+}
+
+const workerStateText = () => {
+  if (worker.paused) return '已暂停'
+  if (worker.state === 'running') return '正在处理'
+  if (worker.state === 'queued') return '等待资源'
+  if (worker.state === 'attention') return '需要检查'
+  return '空闲'
+}
+
+const currentJobText = () => {
+  const current = worker.queue?.current_job
+  if (current) return jobKindText[current.kind] || current.kind
+  const next = worker.queue?.next_job
+  if (next) return `等待：${jobKindText[next.kind] || next.kind}`
+  return '无'
+}
+
+const lastActivityText = () => {
+  const value = worker.queue?.last_activity_at
+  if (!value) return '暂无'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? '暂无' : parsed.toLocaleString('zh-CN')
+}
+
+const bankIsProcessing = (bankId: number) =>
+  Number(coverage[bankId]?.queue?.active_jobs || 0) > 0
+
+const bankActionText = (bankId: number) => {
+  const queue = coverage[bankId]?.queue
+  if (queue?.state === 'running') return `处理中 (${queue.active_jobs})`
+  if (queue?.state === 'queued') return `排队中 (${queue.active_jobs})`
+  if (queue?.state === 'attention') return '重试'
+  return '补全'
+}
 
 const loadBankStatuses = async () => {
   try {
@@ -428,7 +489,7 @@ onMounted(async () => {
   } catch { /* ignore */ }
 
   await loadBankStatuses()
-  pollTimer = setInterval(loadBankStatuses, 10000)
+  pollTimer = setInterval(loadBankStatuses, 5000)
 })
 
 onActivated(() => {
@@ -519,7 +580,7 @@ const testConnection = async (provider: string) => {
   border: 1px solid var(--color-border-light);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: repeat(3, 1fr) auto;
+  grid-template-columns: repeat(4, 1fr) auto;
   align-items: center;
   gap: 16px;
 }
@@ -528,6 +589,16 @@ const testConnection = async (provider: string) => {
   min-width: 0;
   span { display: block; font-size: 0.6875rem; color: var(--color-text-muted); }
   strong { display: block; margin-top: 2px; font-size: 0.875rem; color: var(--color-text-primary); }
+}
+
+.worker-meta {
+  min-height: 26px;
+  padding-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
 }
 
 .reserve-row {

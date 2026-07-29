@@ -4,6 +4,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -94,6 +95,63 @@ def _json_or_none(value: Optional[str]):
         return json.loads(value)
     except json.JSONDecodeError:
         return None
+
+
+def _job_summary(db: Session, bank_id: Optional[int] = None) -> dict:
+    query = db.query(models.AiJob)
+    if bank_id is not None:
+        query = query.filter(models.AiJob.bank_id == bank_id)
+
+    counts = {
+        status: count
+        for status, count in query.with_entities(
+            models.AiJob.status,
+            func.count(models.AiJob.id),
+        ).group_by(models.AiJob.status).all()
+    }
+    current = query.filter(
+        models.AiJob.status == "running",
+    ).order_by(models.AiJob.updated_at.desc()).first()
+    next_job = query.filter(
+        models.AiJob.status == "pending",
+    ).order_by(
+        models.AiJob.priority.asc(),
+        models.AiJob.available_at.asc(),
+    ).first()
+    latest = query.order_by(models.AiJob.updated_at.desc()).first()
+    if current:
+        state = "running"
+    elif counts.get("pending", 0):
+        state = "queued"
+    elif counts.get("failed", 0):
+        state = "attention"
+    else:
+        state = "idle"
+
+    def serialize(job):
+        if not job:
+            return None
+        return {
+            "id": job.id,
+            "kind": job.kind,
+            "target_type": job.target_type,
+            "target_id": job.target_id,
+            "bank_id": job.bank_id,
+            "attempts": job.attempts,
+            "available_at": job.available_at,
+            "updated_at": job.updated_at,
+            "last_error_code": job.last_error_code,
+            "last_error_message": job.last_error_message,
+        }
+
+    return {
+        "state": state,
+        "counts": counts,
+        "active_jobs": counts.get("pending", 0) + counts.get("running", 0),
+        "current_job": serialize(current),
+        "next_job": serialize(next_job),
+        "last_activity_at": latest.updated_at if latest else None,
+    }
 
 
 def _user_word(db: Session, user_id: int, word_id: int) -> models.Word:
@@ -300,7 +358,10 @@ def bank_coverage(
     bank = db.query(models.WordBank).filter(models.WordBank.id == bank_id).first()
     if not bank:
         raise HTTPException(404, "词库不存在")
-    return coverage_for_bank(db, bank_id)
+    return {
+        **coverage_for_bank(db, bank_id),
+        "queue": _job_summary(db, bank_id),
+    }
 
 
 @router.post("/banks/{bank_id}/seed")
@@ -347,11 +408,10 @@ def list_jobs(
         models.AiJob.priority.asc(),
         models.AiJob.created_at.desc(),
     ).limit(min(max(limit, 1), 500)).all()
-    counts = {}
-    for job in db.query(models.AiJob).all():
-        counts[job.status] = counts.get(job.status, 0) + 1
+    summary = _job_summary(db)
     return {
-        "counts": counts,
+        "counts": summary["counts"],
+        "summary": summary,
         "items": [
             {
                 "id": job.id,
@@ -378,11 +438,14 @@ def get_worker(
     admin: models.User = Depends(get_admin_user),
 ):
     flags = _flags(db)
+    queue = _job_summary(db)
     return {
         "paused": flags.ai_worker_paused,
+        "state": "paused" if flags.ai_worker_paused else queue["state"],
         "quota_reserve_percent": flags.quota_reserve_percent,
         "feedback_reserve_percent": flags.feedback_reserve_percent,
         "priority_bank_id": flags.priority_bank_id,
+        "queue": queue,
     }
 
 
