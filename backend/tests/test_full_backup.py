@@ -84,4 +84,13 @@ def test_full_backup_contains_media_manifest_and_restores_links(api, monkeypatch
     assert restored_word.meaning == "adj. 明亮的"
     assert learning_content["memory_anchor"] == "一盏灯照亮房间，对应明亮"
     assert learning_content["image_url"] == "/ai-media/images/bright.png"
+    state = session.get(models.SystemState, 1)
+    flags = session.query(models.FeatureFlags).first()
+    audit = session.query(models.AdminAuditLog).filter_by(
+        action="backup.restore",
+    ).one()
+    assert state.maintenance_mode is False
+    assert state.maintenance_started_at is not None
+    assert flags.ai_worker_paused is False
+    assert audit.actor_username == "tester"
     session.close()

@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import case
+from sqlalchemy import case, or_
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from ... import models
 from ...clock import utc_now
@@ -20,12 +20,20 @@ from ..learning_content import (
     queue_ai_job,
 )
 from . import AiService, MemoryBundleCandidate
-from .base import ProviderError, QuotaExhaustedError, RateLimitError
+from .base import (
+    ConfigurationError,
+    ContentRejectedError,
+    ProviderError,
+    QuotaExhaustedError,
+    RateLimitError,
+)
 
 
 logger = logging.getLogger(__name__)
 QUOTA_CHECK_INTERVAL = timedelta(minutes=10)
 STALE_JOB_AGE = timedelta(minutes=10)
+TEXT_JOB_KINDS = ("feedback_bundle", "bundle_text", "bundle_refresh")
+MEDIA_JOB_KINDS = ("image", "audio")
 
 
 class CandidateValidationError(Exception):
@@ -256,7 +264,17 @@ class AiJobProcessor:
         self.db.commit()
         return snapshot
 
-    async def process_next(self) -> bool:
+    async def process_next(self, kinds: Optional[tuple[str, ...]] = None) -> bool:
+        state_session = sessionmaker(bind=self.db.get_bind())
+        with state_session() as state_db:
+            system_state = state_db.query(models.SystemState).filter(
+                models.SystemState.id == 1,
+            ).first()
+            if system_state and system_state.maintenance_mode:
+                return False
+            maintenance_marker = (
+                system_state.maintenance_started_at if system_state else None
+            )
         flags = self._flags()
         if flags.ai_worker_paused:
             return False
@@ -264,6 +282,8 @@ class AiJobProcessor:
             models.AiJob.status == "pending",
             models.AiJob.available_at <= utc_now(),
         )
+        if kinds:
+            query = query.filter(models.AiJob.kind.in_(kinds))
         if flags.priority_bank_id:
             query = query.order_by(
                 case(
@@ -299,6 +319,27 @@ class AiJobProcessor:
         self.db.commit()
         try:
             await self._dispatch(job)
+            with state_session() as state_db:
+                current_state = state_db.query(models.SystemState).filter(
+                    models.SystemState.id == 1,
+                ).first()
+                maintenance_changed = current_state and (
+                    current_state.maintenance_mode
+                    or current_state.maintenance_started_at != maintenance_marker
+                )
+            if maintenance_changed:
+                self.db.rollback()
+                if not current_state.maintenance_mode:
+                    retry_job = self.db.query(models.AiJob).filter(
+                        models.AiJob.id == job.id,
+                        models.AiJob.status == "running",
+                    ).first()
+                    if retry_job:
+                        retry_job.status = "pending"
+                        retry_job.available_at = utc_now()
+                        retry_job.updated_at = utc_now()
+                        self.db.commit()
+                return False
             job.status = "completed"
             job.last_error_code = None
             job.last_error_message = None
@@ -309,16 +350,34 @@ class AiJobProcessor:
             self._reschedule(job, str(exc), exc.code, 600)
         except RateLimitError as exc:
             self._reschedule(job, str(exc), "rate_limited", exc.retry_after or 60)
-        except ProviderError as exc:
+        except ConfigurationError as exc:
             job.status = "failed"
             job.last_error_code = exc.code or "provider_error"
             job.last_error_message = str(exc)
-            self._pause_worker()
+            self._pause_worker(str(exc))
             self._mark_feedback_manual(job)
+            self.db.commit()
+        except ContentRejectedError as exc:
+            job.status = "failed"
+            job.last_error_code = exc.code or "content_rejected"
+            job.last_error_message = str(exc)
+            self._mark_feedback_manual(job)
+            self.db.commit()
+        except ProviderError as exc:
+            if job.attempts >= job.max_attempts:
+                job.status = "failed"
+                self._mark_feedback_manual(job)
+            else:
+                job.status = "pending"
+                job.available_at = utc_now() + timedelta(
+                    seconds=min(900, 30 * (2 ** max(job.attempts - 1, 0)))
+                )
+            job.last_error_code = exc.code or "provider_error"
+            job.last_error_message = str(exc)[:1000]
             self.db.commit()
         except CandidateValidationError as exc:
             job.status = "failed"
-            job.last_error_code = "manual_review"
+            job.last_error_code = "content_validation"
             job.last_error_message = str(exc)[:1000]
             self._mark_feedback_manual(job)
             self.db.commit()
@@ -387,9 +446,37 @@ class AiJobProcessor:
         job.last_error_message = message[:1000]
         self.db.commit()
 
-    def _pause_worker(self) -> None:
+    def _pause_worker(self, reason: str) -> None:
         flags = self._flags()
         flags.ai_worker_paused = True
+        flags.ai_worker_pause_reason = reason[:1000]
+        flags.ai_worker_paused_at = utc_now()
+        flags.revision = (flags.revision or 1) + 1
+
+    def requeue_failed(self, *, commit: bool = True) -> int:
+        """Explicit admin recovery for failed background work after a fix."""
+
+        jobs = self.db.query(models.AiJob).filter(
+            models.AiJob.status == "failed",
+            models.AiJob.kind.in_(("bundle_text", "bundle_refresh", "image", "audio")),
+            or_(
+                models.AiJob.last_error_code.is_(None),
+                ~models.AiJob.last_error_code.in_(("1026", "1027", "content_rejected")),
+            ),
+        ).all()
+        now = utc_now()
+        for job in jobs:
+            job.status = "pending"
+            job.attempts = 0
+            job.available_at = now
+            job.last_error_code = None
+            job.last_error_message = None
+            job.updated_at = now
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
+        return len(jobs)
 
     def _mark_feedback_manual(self, job: models.AiJob) -> None:
         feedback_id = _json_load(job.payload).get("feedback_id")
@@ -420,14 +507,19 @@ class AiJobProcessor:
         feedback_context: str = "",
     ) -> MemoryBundleCandidate:
         last_error: Optional[Exception] = None
+        validation_feedback = ""
         for _ in range(2):
             try:
+                options = {"feedback_context": feedback_context}
+                if validation_feedback:
+                    options["validation_feedback"] = validation_feedback
                 return await AiService(self.db).generate_memory_candidate(
                     word,
-                    feedback_context=feedback_context,
+                    **options,
                 )
             except (ValueError, TypeError, RuntimeError) as exc:
                 last_error = exc
+                validation_feedback = str(exc)[:600]
         raise CandidateValidationError(
             f"AI Schema/quality validation failed twice: {last_error}"
         )
@@ -573,7 +665,7 @@ class AiJobProcessor:
             return
         provider = AiService(self.db).minimax
         if not provider:
-            raise ProviderError("MiniMax 未配置，图片任务已停止", code="not_configured")
+            raise ConfigurationError("MiniMax 未配置，图片任务已停止", code="not_configured")
         content = await provider.generate_image(bundle.image_prompt)
         path, digest, mime = _store_media(
             bundle_id=bundle.id,
@@ -603,7 +695,7 @@ class AiJobProcessor:
             return
         provider = AiService(self.db).minimax
         if not provider:
-            raise ProviderError("MiniMax 未配置，语音任务已停止", code="not_configured")
+            raise ConfigurationError("MiniMax 未配置，语音任务已停止", code="not_configured")
         content = await provider.text_to_speech(bundle.narration_text)
         path, digest, mime = _store_media(
             bundle_id=bundle.id,
@@ -789,6 +881,7 @@ class AiJobProcessor:
                 "active_bundle_id": replacement.id,
                 "status": "ready",
                 "updated_at": utc_now(),
+                "revision": models.WordMemoryLink.revision + 1,
             },
             synchronize_session=False,
         )
@@ -809,6 +902,8 @@ class AiJobProcessor:
         if not link:
             link = models.WordMemoryLink(word_id=word_id)
             self.db.add(link)
+        else:
+            link.revision = (link.revision or 1) + 1
         link.active_bundle_id = bundle_id
         link.status = status
         link.updated_at = utc_now()
@@ -836,7 +931,7 @@ class AiJobProcessor:
 
 
 class SilentAiWorker:
-    """One cooperative task means at most one MiniMax request at a time."""
+    """Persistent text and media lanes; each lane executes one request at a time."""
 
     def __init__(self, session_factory):
         self.session_factory = session_factory
@@ -846,6 +941,10 @@ class SilentAiWorker:
         self._heartbeat_at: Optional[datetime] = None
         self._last_success_at: Optional[datetime] = None
         self._last_error: Optional[str] = None
+        self._lane_errors: dict[str, Optional[str]] = {
+            "text": None,
+            "media": None,
+        }
 
     def start(self) -> None:
         if self._task and not self._task.done():
@@ -874,7 +973,12 @@ class SilentAiWorker:
     async def _supervise(self) -> None:
         while not self._stop.is_set():
             try:
-                await self._consume()
+                with self.session_factory() as db:
+                    AiJobProcessor(db).recover_interrupted()
+                await asyncio.gather(
+                    self._consume_lane("text", TEXT_JOB_KINDS),
+                    self._consume_lane("media", MEDIA_JOB_KINDS),
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -886,32 +990,38 @@ class SilentAiWorker:
                 except asyncio.TimeoutError:
                     pass
 
-    async def _consume(self) -> None:
-        with self.session_factory() as db:
-            AiJobProcessor(db).recover_interrupted()
+    async def _consume_lane(
+        self,
+        lane: str,
+        kinds: tuple[str, ...],
+    ) -> None:
         while not self._stop.is_set():
             processed = False
             with self.session_factory() as db:
                 try:
                     processor = AiJobProcessor(db)
                     processor.recover_stale()
-                    processed = await processor.process_next()
+                    processed = await processor.process_next(kinds)
                     if processed:
                         self._last_success_at = utc_now()
-                        self._last_error = None
+                        self._lane_errors[lane] = None
+                        self._last_error = next(
+                            (error for error in self._lane_errors.values() if error),
+                            None,
+                        )
                 except OperationalError as exc:
                     db.rollback()
                     if "database is locked" in str(exc).lower():
-                        self._last_error = "SQLite 短暂繁忙，后台将在下一轮继续"
-                        try:
-                            AiJobProcessor(db).recover_interrupted()
-                        except OperationalError:
-                            db.rollback()
+                        message = f"{lane} 通道遇到 SQLite 短暂繁忙，将在下一轮继续"
+                        self._lane_errors[lane] = message
+                        self._last_error = message
                     else:
                         raise
                 except Exception as exc:
-                    self._last_error = str(exc)[:1000]
-                    logger.exception("Silent AI worker iteration failed")
+                    message = str(exc)[:1000]
+                    self._lane_errors[lane] = message
+                    self._last_error = message
+                    logger.exception("Silent AI worker %s lane iteration failed", lane)
                     db.rollback()
             delay = 0.25 if processed else 5
             try:
@@ -926,6 +1036,10 @@ class SilentAiWorker:
             "heartbeat_at": self._heartbeat_at,
             "last_success_at": self._last_success_at,
             "last_error": self._last_error,
+            "lanes": {
+                name: {"last_error": error}
+                for name, error in self._lane_errors.items()
+            },
         }
 
 
@@ -953,5 +1067,6 @@ def silent_worker_status() -> dict:
             "heartbeat_at": None,
             "last_success_at": None,
             "last_error": "后台执行器尚未启动",
+            "lanes": {},
         }
     return _worker.status()

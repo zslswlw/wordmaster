@@ -21,6 +21,14 @@ class ProviderError(Exception):
         self.code = code
 
 
+class ConfigurationError(ProviderError):
+    """A persistent provider/configuration error that requires admin action."""
+
+
+class ContentRejectedError(ProviderError):
+    """One request was rejected; other queued work may still proceed."""
+
+
 class QuotaExhaustedError(ProviderError):
     """The token plan window is exhausted until the provider resets it."""
 

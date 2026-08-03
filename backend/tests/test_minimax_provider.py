@@ -4,7 +4,14 @@ import json
 import httpx
 import pytest
 
-from app.services.ai.base import ProviderConfig, ProviderError, QuotaExhaustedError, RateLimitError
+from app.services.ai.base import (
+    ConfigurationError,
+    ContentRejectedError,
+    ProviderConfig,
+    ProviderError,
+    QuotaExhaustedError,
+    RateLimitError,
+)
 from app.services.ai.minimax import MiniMaxProvider, _raise_for_body_error
 
 
@@ -79,6 +86,8 @@ def test_minimax_chat_defaults_to_m3(monkeypatch):
 
     assert asyncio.run(provider.chat([{"role": "user", "content": "test"}])) == "{}"
     assert captured["body"]["model"] == "MiniMax-M3"
+    assert captured["body"]["max_completion_tokens"] == 1200
+    assert "max_tokens" not in captured["body"]
 
 
 def test_minimax_error_codes_have_distinct_retry_policy():
@@ -87,13 +96,23 @@ def test_minimax_error_codes_have_distinct_retry_policy():
             {"base_resp": {"status_code": 2045, "status_msg": "busy"}},
             "image",
         )
+    with pytest.raises(RateLimitError):
+        _raise_for_body_error(
+            {"base_resp": {"status_code": 1013, "status_msg": "internal"}},
+            "chat",
+        )
     with pytest.raises(QuotaExhaustedError):
         _raise_for_body_error(
             {"base_resp": {"status_code": 2056, "status_msg": "plan exhausted"}},
             "image",
         )
-    with pytest.raises(ProviderError):
+    with pytest.raises(ConfigurationError):
         _raise_for_body_error(
             {"base_resp": {"status_code": 1004, "status_msg": "invalid key"}},
+            "image",
+        )
+    with pytest.raises(ContentRejectedError):
+        _raise_for_body_error(
+            {"base_resp": {"status_code": 1027, "status_msg": "sensitive"}},
             "image",
         )

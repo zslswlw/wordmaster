@@ -10,6 +10,7 @@
         <div class="card-header">
           <h3>DeepSeek</h3>
           <span class="badge">备用文字</span>
+          <span v-if="deepseekForm.id" class="revision-label">版本 {{ deepseekForm.revision }}</span>
         </div>
         <el-form :model="deepseekForm" label-position="top" size="default">
           <el-form-item label="API Key">
@@ -36,6 +37,7 @@
         <div class="card-header">
           <h3>MiniMax</h3>
           <span class="badge">文字 · 生图 · 播报</span>
+          <span v-if="minimaxForm.id" class="revision-label">版本 {{ minimaxForm.revision }}</span>
         </div>
         <el-form :model="minimaxForm" label-position="top" size="default">
           <el-form-item label="API Key">
@@ -105,7 +107,7 @@
 
     <div class="section">
       <h3>静默资源调度</h3>
-      <p class="section-desc">学习不等待生成任务；额度达到保留线后后台会自动暂停普通补全。</p>
+      <p class="section-desc">学习不等待生成任务；额度不足只会等待恢复，管理员操作或密钥、接口配置错误才会暂停执行器。</p>
       <div class="worker-panel">
         <div class="worker-stat">
           <span>运行状态</span>
@@ -116,27 +118,40 @@
           <strong>{{ quotaText() }}</strong>
         </div>
         <div class="worker-stat">
-          <span>当前请求 / 后台步骤</span>
+          <span>正在调用 / 排队步骤</span>
           <strong>{{ jobCountsText() }}</strong>
         </div>
         <div class="worker-stat">
           <span>当前任务</span>
           <strong>{{ currentJobText() }}</strong>
         </div>
-        <el-button :type="worker.paused ? 'primary' : 'default'" :disabled="!dashboardLoaded" @click="toggleWorker">
+        <el-button :type="worker.paused ? 'primary' : 'default'" :disabled="!dashboardLoaded" @click="toggleWorker()">
           {{ worker.paused ? '恢复' : '暂停' }}
         </el-button>
       </div>
+      <div v-if="worker.paused && worker.pause_reason" class="worker-alert">
+        暂停原因：{{ worker.pause_reason }}
+      </div>
       <div class="worker-meta">
-        <span>{{ dashboardError || `状态时间：${snapshotText()}` }}</span>
-        <span>最近任务：{{ lastActivityText() }}</span>
-        <span v-if="jobs.failed">失败待检查：{{ jobs.failed }}</span>
+        <span :class="{ 'stale-text': dashboardError }">{{ dashboardError ? `${dashboardError}，数据可能已过期` : `最后同步：${snapshotText()}` }}</span>
+        <span v-if="dashboardLoaded">版本：{{ worker.revision }}</span>
+        <span>最近成功：{{ lastActivityText() }}</span>
+        <span v-if="worker.queue?.last_failure_at">最近失败：{{ formatDate(worker.queue.last_failure_at) }}</span>
+      </div>
+      <div class="worker-breakdown">
+        <span>过去 24 小时：{{ completedBreakdownText() }}</span>
+        <span>排队构成：{{ pendingBreakdownText() }}</span>
+        <span v-if="jobs.failed">历史未成功：{{ failedBreakdownText() }}</span>
+        <span v-if="jobs.failed">失败原因：{{ failedReasonText() }}</span>
+        <el-button v-if="jobs.failed" size="small" text :loading="retryingFailed" @click="retryFailedJobs">
+          重试可恢复项
+        </el-button>
       </div>
       <div class="reserve-row">
         <span>普通任务保留额度</span>
-        <el-input-number v-model="worker.quota_reserve_percent" :min="0" :max="95" :step="5" @change="saveWorker" />
+        <el-input-number v-model="workerDraft.quota_reserve_percent" :min="0" :max="95" :step="5" @change="saveWorkerField('quota_reserve_percent')" />
         <span>反馈任务保留额度</span>
-        <el-input-number v-model="worker.feedback_reserve_percent" :min="0" :max="95" :step="5" @change="saveWorker" />
+        <el-input-number v-model="workerDraft.feedback_reserve_percent" :min="0" :max="95" :step="5" @change="saveWorkerField('feedback_reserve_percent')" />
       </div>
     </div>
 
@@ -248,13 +263,13 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { settingsAPI, aiAPI } from '../api'
 import { useAuth } from '../composables/useAuth'
 
 // --- Provider 表单 ---
-const deepseekForm = reactive({ provider: 'deepseek', api_key: '', api_base: 'https://api.deepseek.com', text_model: 'deepseek-chat', image_model: '', speech_model: '', is_enabled: true })
-const minimaxForm = reactive({ provider: 'minimax', api_key: '', api_base: 'https://api.minimaxi.com', text_model: 'MiniMax-M3', image_model: 'image-01', speech_model: 'speech-2.8-turbo', is_enabled: true })
+const deepseekForm = reactive({ id: null as number | null, revision: 0, provider: 'deepseek', api_key: '', api_base: 'https://api.deepseek.com', text_model: 'deepseek-chat', image_model: '', speech_model: '', is_enabled: true })
+const minimaxForm = reactive({ id: null as number | null, revision: 0, provider: 'minimax', api_key: '', api_base: 'https://api.minimaxi.com', text_model: 'MiniMax-M3', image_model: 'image-01', speech_model: 'speech-2.8-turbo', is_enabled: true })
 const savedKeys = reactive({ deepseek: false, minimax: false })
 
 const savingDeepseek = ref(false)
@@ -269,12 +284,29 @@ const flags = reactive({
   mnemonic_enabled: true,
   error_analysis_enabled: true,
   story_enabled: false,
+  revision: 0,
 })
 
 const saveFlags = async () => {
   try {
-    await settingsAPI.updateFeatureFlags({ ...flags })
-  } catch { /* ignore */ }
+    const { data } = await settingsAPI.updateFeatureFlags({ ...flags, expected_revision: flags.revision })
+    Object.assign(flags, data)
+  } catch (e: any) {
+    const conflict = e.response?.data
+    if (conflict?.code !== 'stale_revision') {
+      ElMessage.error(conflict?.detail || '功能开关保存失败')
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        `服务端版本已更新为 ${conflict.current.revision}。当前开关选择已保留，是否基于最新版本再次保存？`,
+        '另一位管理员已更新',
+        { confirmButtonText: '再次保存', cancelButtonText: '暂不保存', type: 'warning' },
+      )
+      flags.revision = conflict.current.revision
+      await saveFlags()
+    } catch { /* keep the local switch values */ }
+  }
 }
 
 // --- 预处理 ---
@@ -285,13 +317,18 @@ const quota = reactive<{ remaining_percent: number | null; status: string }>({ r
 const jobs = reactive<Record<string, number>>({})
 const worker = reactive({
   paused: false,
+  pause_reason: null as string | null,
+  paused_at: null as string | null,
   state: 'loading',
   quota_reserve_percent: 30,
   feedback_reserve_percent: 20,
   priority_bank_id: null as number | null,
+  revision: 0,
   queue: null as any,
   runtime: null as any,
 })
+const workerDraft = reactive({ quota_reserve_percent: 30, feedback_reserve_percent: 20 })
+const dirtyWorkerFields = new Set<string>()
 const dashboardLoaded = ref(false)
 const dashboardError = ref('')
 const observedAt = ref<string | null>(null)
@@ -299,6 +336,7 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null
 let pollInFlight = false
 let viewActive = false
 let mounted = false
+const retryingFailed = ref(false)
 
 const jobKindText: Record<string, string> = {
   bundle_text: '整理记忆方案',
@@ -332,24 +370,69 @@ const jobCountsText = () => {
 
 const currentJobText = () => {
   if (!dashboardLoaded.value) return '加载中'
-  const current = worker.queue?.current_job
-  if (current) return jobKindText[current.kind] || current.kind
+  const current = worker.queue?.current_jobs || []
+  if (current.length) {
+    return current.map((job: any) => jobKindText[job.kind] || job.kind).join(' + ')
+  }
   const next = worker.queue?.next_job
   if (next) return `等待：${jobKindText[next.kind] || next.kind}`
   return '无'
 }
 
+const formatDate = (value?: string | null) => {
+  if (!value) return '暂无'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return '暂无'
+  return `${new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(parsed)}（上海）`
+}
+
 const snapshotText = () => {
-  if (!observedAt.value) return '暂无'
-  const parsed = new Date(observedAt.value)
-  return Number.isNaN(parsed.getTime()) ? '暂无' : parsed.toLocaleString('zh-CN')
+  return formatDate(observedAt.value)
 }
 
 const lastActivityText = () => {
-  const value = worker.queue?.last_activity_at
-  if (!value) return '暂无'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? '暂无' : parsed.toLocaleString('zh-CN')
+  return formatDate(worker.queue?.last_activity_at)
+}
+
+const kindsText = (counts: Record<string, number> = {}) => {
+  const parts = [
+    ['文字', (counts.bundle_text || 0) + (counts.bundle_refresh || 0) + (counts.feedback_bundle || 0)],
+    ['图片', counts.image || 0],
+    ['播报', counts.audio || 0],
+  ].filter(([, count]) => Number(count) > 0)
+  return parts.length ? parts.map(([label, count]) => `${label} ${count}`).join(' · ') : '无'
+}
+
+const statusByKind = (status: string) => Object.fromEntries(
+  Object.entries(worker.queue?.by_kind || {}).map(
+    ([kind, values]: [string, any]) => [kind, Number(values?.[status] || 0)],
+  ),
+)
+
+const completedBreakdownText = () => kindsText(worker.queue?.completed_24h || {})
+const pendingBreakdownText = () => kindsText(statusByKind('pending'))
+const failedBreakdownText = () => kindsText(statusByKind('failed'))
+const errorCodeText: Record<string, string> = {
+  content_validation: '内容校验',
+  manual_review: '旧版内容校验',
+  job_error: '运行异常',
+  provider_error: '供应商响应',
+  '1004': '密钥无效',
+  '1008': '余额不足',
+  '1026': '输入审核',
+  '1027': '输出审核',
+  '1039': '长度参数',
+  unknown: '未分类',
+}
+const failedReasonText = () => {
+  const entries = Object.entries(worker.queue?.failed_by_code || {})
+  return entries.length
+    ? entries.map(([code, count]) => `${errorCodeText[code] || code} ${count}`).join(' · ')
+    : '无'
 }
 
 const bankIsProcessing = (bankId: number) =>
@@ -401,6 +484,9 @@ const loadDashboard = async () => {
     Object.keys(jobs).forEach(key => delete jobs[key])
     Object.assign(jobs, data.jobs || {})
     Object.assign(worker, data.worker || {})
+    for (const field of ['quota_reserve_percent', 'feedback_reserve_percent'] as const) {
+      if (!dirtyWorkerFields.has(field)) workerDraft[field] = worker[field]
+    }
     observedAt.value = data.observed_at || null
     dashboardLoaded.value = true
     dashboardError.value = ''
@@ -427,27 +513,67 @@ const reprocessBank = async (bankId: number) => {
   }
 }
 
-const saveWorker = async () => {
+const saveWorkerField = async (field: 'quota_reserve_percent' | 'feedback_reserve_percent', expectedRevision = worker.revision) => {
+  dirtyWorkerFields.add(field)
+  const localValue = workerDraft[field]
   try {
-    const { data } = await aiAPI.updateWorker({
-      quota_reserve_percent: worker.quota_reserve_percent,
-      feedback_reserve_percent: worker.feedback_reserve_percent,
-      priority_bank_id: worker.priority_bank_id,
-    })
+    const { data } = await aiAPI.updateWorker({ [field]: localValue, expected_revision: expectedRevision })
     Object.assign(worker, data)
+    workerDraft[field] = worker[field]
+    dirtyWorkerFields.delete(field)
     await loadDashboard()
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.detail || '调度设置保存失败')
+    const conflict = e.response?.data
+    if (conflict?.code !== 'stale_revision') {
+      ElMessage.error(conflict?.detail || '调度设置保存失败')
+      return
+    }
+    Object.assign(worker, conflict.current)
+    try {
+      await ElMessageBox.confirm(
+        `服务端调度版本已更新为 ${conflict.current.revision}，当前输入 ${localValue}% 已保留。是否再次保存这个字段？`,
+        '调度设置有更新',
+        { confirmButtonText: '再次保存', cancelButtonText: '暂不保存', type: 'warning' },
+      )
+      await saveWorkerField(field, conflict.current.revision)
+    } catch { /* preserve workerDraft until the administrator decides */ }
   }
 }
 
-const toggleWorker = async () => {
+const toggleWorker = async (expectedRevision = worker.revision, desired = !worker.paused) => {
   try {
-    const { data } = await aiAPI.updateWorker({ paused: !worker.paused })
+    const { data } = await aiAPI.updateWorker({ paused: desired, expected_revision: expectedRevision })
     Object.assign(worker, data)
+    if (data.requeued_failed) ElMessage.success(`已恢复并重新排队 ${data.requeued_failed} 个可恢复步骤`)
     await loadDashboard()
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.detail || '状态更新失败')
+    const conflict = e.response?.data
+    if (conflict?.code !== 'stale_revision') {
+      ElMessage.error(conflict?.detail || '状态更新失败')
+      return
+    }
+    Object.assign(worker, conflict.current)
+    try {
+      await ElMessageBox.confirm(
+        `另一位管理员已改变调度状态。是否基于服务端版本 ${conflict.current.revision} 再次${desired ? '暂停' : '恢复'}？`,
+        '调度状态有更新',
+        { confirmButtonText: '再次执行', cancelButtonText: '取消', type: 'warning' },
+      )
+      await toggleWorker(conflict.current.revision, desired)
+    } catch { /* latest server state remains visible */ }
+  }
+}
+
+const retryFailedJobs = async () => {
+  retryingFailed.value = true
+  try {
+    const { data } = await aiAPI.retryFailedJobs()
+    ElMessage.success(data.requeued ? `已重新排队 ${data.requeued} 个步骤` : '没有可自动重试的步骤')
+    await loadDashboard()
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '重新排队失败')
+  } finally {
+    retryingFailed.value = false
   }
 }
 
@@ -521,12 +647,23 @@ const saveBundleEdit = async () => {
 
 const activateVersion = async (bundleId: number) => {
   if (!selectedFeedback.value) return
+  const expectedActive = activeBundleId.value
+  const selectedVersion = versions.value.find((item: any) => item.id === bundleId)
   try {
-    await aiAPI.activateBundle(selectedFeedback.value.word_id, bundleId)
+    if (selectedVersion?.status === 'archived') {
+      await aiAPI.rollbackBundle(selectedFeedback.value.word_id, bundleId, expectedActive)
+    } else {
+      await aiAPI.activateBundle(selectedFeedback.value.word_id, bundleId, expectedActive)
+    }
     ElMessage.success('版本已启用')
     await Promise.all([loadVersions(), loadDashboard()])
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.detail || '版本尚未就绪')
+    if (e.response?.data?.code === 'stale_revision') {
+      ElMessage.warning('当前启用版本已被另一位管理员更改，已加载最新版本')
+      await loadVersions()
+    } else {
+      ElMessage.error(e.response?.data?.detail || '版本尚未就绪')
+    }
   }
 }
 
@@ -541,6 +678,8 @@ onMounted(async () => {
     for (const c of data) {
       const form = c.provider === 'deepseek' ? deepseekForm : minimaxForm
       savedKeys[c.provider as 'deepseek' | 'minimax'] = Boolean(c.has_api_key)
+      form.id = c.id
+      form.revision = c.revision
       form.api_key = ''
       form.api_base = c.api_base
       form.text_model = c.text_model
@@ -570,17 +709,41 @@ onBeforeUnmount(() => {
 })
 
 // --- 保存配置 ---
-const saveConfig = async (provider: string) => {
+const saveConfig = async (provider: string, expectedRevision?: number) => {
   const form = provider === 'deepseek' ? deepseekForm : minimaxForm
   const saving = provider === 'deepseek' ? savingDeepseek : savingMinimax
   saving.value = true
   try {
-    await settingsAPI.saveConfig({ ...form })
+    const { id: _id, revision: _revision, ...values } = form
+    const payload = {
+      ...values,
+      expected_revision: expectedRevision ?? form.revision,
+    }
+    const { data } = form.id
+      ? await settingsAPI.updateConfig(form.id, payload)
+      : await settingsAPI.saveConfig(payload)
+    form.id = data.id
+    form.revision = data.revision
     savedKeys[provider as 'deepseek' | 'minimax'] = Boolean(form.api_key) || savedKeys[provider as 'deepseek' | 'minimax']
     form.api_key = ''
     ElMessage.success(`${provider} 配置已保存`)
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.detail || '保存失败')
+    const conflict = e.response?.data
+    if (conflict?.code !== 'stale_revision') {
+      ElMessage.error(conflict?.detail || '保存失败')
+      return
+    }
+    const current = conflict.current
+    try {
+      await ElMessageBox.confirm(
+        `服务端已是版本 ${current.revision}（模型：${current.text_model || '未设置'}，地址：${current.api_base}）。当前输入和密钥不会丢失，是否基于新版本再次保存？`,
+        '配置已被另一位管理员更新',
+        { confirmButtonText: '再次保存', cancelButtonText: '暂不保存', type: 'warning' },
+      )
+      form.id = current.id
+      form.revision = current.revision
+      await saveConfig(provider, current.revision)
+    } catch { /* preserve local form values */ }
   } finally {
     saving.value = false
   }
@@ -631,6 +794,8 @@ const testConnection = async (provider: string) => {
   h3 { font-size: 0.9375rem; font-weight: 600; color: var(--color-text-primary); margin: 0; }
   .badge { font-size: 0.6875rem; color: var(--color-text-muted); background: var(--color-bg-muted); padding: 2px 8px; border-radius: 4px; }
 }
+.revision-label { margin-left: auto; font-size: 0.6875rem; color: var(--color-text-muted); }
+.stale-text { color: var(--color-danger); }
 
 .card-actions {
   display: flex; gap: 8px; margin-top: 4px;
@@ -668,6 +833,26 @@ const testConnection = async (provider: string) => {
   gap: 16px;
   color: var(--color-text-muted);
   font-size: 0.6875rem;
+}
+
+.worker-alert {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.worker-breakdown {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
 }
 
 .reserve-row {
@@ -797,6 +982,7 @@ const testConnection = async (provider: string) => {
   .provider-cards { grid-template-columns: 1fr; }
   .toggle-desc { max-width: 220px; }
   .worker-panel { grid-template-columns: 1fr 1fr; }
+  .worker-meta { justify-content: flex-start; flex-wrap: wrap; gap: 4px 12px; }
   .reserve-row { grid-template-columns: 1fr auto; }
   .bank-info { flex-basis: 90px; }
   .feedback-row { grid-template-columns: minmax(0, 1fr) auto; }

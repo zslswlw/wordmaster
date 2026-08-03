@@ -65,6 +65,7 @@ class WordBank(Base):
     name = Column(String, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # 共享词库，admin 管理
     word_count = Column(Integer, default=0)
+    revision = Column(Integer, default=1, nullable=False)
     created_at = Column(DateTime, default=utc_now)
 
 
@@ -165,6 +166,7 @@ class ApiConfig(Base):
     image_model = Column(String)
     speech_model = Column(String)
     is_enabled = Column(Boolean, default=False)
+    revision = Column(Integer, default=1, nullable=False)
 
 
 class WordErrorPattern(Base):
@@ -190,9 +192,12 @@ class FeatureFlags(Base):
     error_analysis_enabled = Column(Boolean, default=True)
     story_enabled = Column(Boolean, default=False)
     ai_worker_paused = Column(Boolean, default=False)
+    ai_worker_pause_reason = Column(Text, nullable=True)
+    ai_worker_paused_at = Column(DateTime, nullable=True)
     quota_reserve_percent = Column(Integer, default=30)
     feedback_reserve_percent = Column(Integer, default=20)
     priority_bank_id = Column(Integer, ForeignKey("word_banks.id"), nullable=True)
+    revision = Column(Integer, default=1, nullable=False)
 
 
 class MemoryBundle(Base):
@@ -215,7 +220,7 @@ class MemoryBundle(Base):
     normalized_pos = Column(String, nullable=True)
     primary_meaning = Column(String, nullable=False)
     strategy = Column(String, nullable=True)
-    memory_anchor = Column(String(45), nullable=True)
+    memory_anchor = Column(String(80), nullable=True)
     scene_summary = Column(String, nullable=True)
     image_prompt = Column(Text, nullable=True)
     narration_text = Column(String(64), nullable=False)
@@ -280,7 +285,43 @@ class WordMemoryLink(Base):
         nullable=True,
     )
     status = Column(String, default="pending", nullable=False)
+    revision = Column(Integer, default=1, nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class SystemState(Base):
+    """Global write guard used while a backup restore is in progress."""
+
+    __tablename__ = "system_state"
+
+    id = Column(Integer, primary_key=True, default=1)
+    maintenance_mode = Column(Boolean, default=False, nullable=False)
+    maintenance_reason = Column(String, nullable=True)
+    maintenance_started_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    maintenance_started_at = Column(DateTime, nullable=True)
+
+
+class AdminAuditLog(Base):
+    """Immutable trace of security-sensitive administrator actions."""
+
+    __tablename__ = "admin_audit_logs"
+    __table_args__ = (
+        Index("ix_admin_audit_created", "created_at"),
+        Index("ix_admin_audit_actor_created", "actor_user_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    actor_username = Column(String, nullable=False)
+    action = Column(String, nullable=False, index=True)
+    target_type = Column(String, nullable=False)
+    target_id = Column(String, nullable=True)
+    before_json = Column(Text, nullable=True)
+    after_json = Column(Text, nullable=True)
+    request_id = Column(String(36), nullable=False, index=True)
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
 
 
 class MemoryFeedback(Base):

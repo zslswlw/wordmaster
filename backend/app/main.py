@@ -1,9 +1,10 @@
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -23,6 +24,7 @@ if ENV == "test":
 
 from .clock import enable_test_clock, get_clock
 from .routers import (
+    admin,
     ai,
     ai_evolution,
     audio,
@@ -34,6 +36,7 @@ from .routers import (
     settings,
     study,
 )
+from .admin_consistency import MaintenanceLocked, RevisionConflict, get_system_state
 from .models import SessionLocal
 from .services.ai.worker import media_root, start_silent_worker, stop_silent_worker
 from .services.learning_content import backfill_legacy_memory
@@ -48,6 +51,11 @@ if ENV == "test":
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     if ENV != "test":
+        web_concurrency = int(os.getenv("WEB_CONCURRENCY", "1"))
+        if web_concurrency != 1 and os.getenv("AI_WORKER_ENABLED", "true").lower() == "true":
+            raise RuntimeError(
+                "SQLite AI worker requires WEB_CONCURRENCY=1; use a shared claimed queue before scaling replicas"
+            )
         with SessionLocal() as db:
             backfill_legacy_memory(db)
         if os.getenv("AI_WORKER_ENABLED", "true").lower() == "true":
@@ -64,6 +72,49 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(RevisionConflict)
+async def revision_conflict_handler(_request: Request, exc: RevisionConflict):
+    return JSONResponse(
+        status_code=409,
+        content={
+            "code": "stale_revision",
+            "detail": "另一位管理员已更新",
+            "current": exc.current,
+        },
+    )
+
+
+@app.exception_handler(MaintenanceLocked)
+async def maintenance_locked_handler(_request: Request, exc: MaintenanceLocked):
+    return JSONResponse(
+        status_code=423,
+        content={"code": "maintenance_locked", "detail": exc.reason},
+    )
+
+
+@app.middleware("http")
+async def request_identity_and_maintenance(request: Request, call_next):
+    request.state.request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    is_write = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+    login_request = request.url.path == "/api/auth/login"
+    if is_write and request.url.path.startswith("/api/") and not login_request:
+        session_factory = getattr(request.app.state, "session_factory", SessionLocal)
+        with session_factory() as db:
+            state = get_system_state(db)
+            if state.maintenance_mode:
+                return JSONResponse(
+                    status_code=423,
+                    content={
+                        "code": "maintenance_locked",
+                        "detail": state.maintenance_reason or "系统正在恢复备份，请稍后再试",
+                    },
+                    headers={"X-Request-ID": request.state.request_id},
+                )
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request.state.request_id
+    return response
+
 # 根据环境设置允许的域名
 if ENV == "production":
     allow_origins = [
@@ -77,11 +128,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
 app.include_router(auth.router)
+app.include_router(admin.router)
 app.include_router(banks.router)
 app.include_router(groups.router)
 app.include_router(study.router)

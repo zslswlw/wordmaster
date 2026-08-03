@@ -6,6 +6,8 @@ import httpx
 
 from .base import (
     BaseProvider,
+    ConfigurationError,
+    ContentRejectedError,
     ProviderError,
     QuotaExhaustedError,
     RateLimitError,
@@ -46,6 +48,11 @@ def _raise_for_http_error(resp: httpx.Response, operation: str) -> None:
             f"MiniMax {operation} service unavailable ({resp.status_code})",
             retry_after=60.0,
         )
+    if resp.status_code in {401, 403, 404}:
+        raise ConfigurationError(
+            f"MiniMax {operation} HTTP {resp.status_code}",
+            code=f"http_{resp.status_code}",
+        )
     if resp.status_code >= 400:
         raise ProviderError(
             f"MiniMax {operation} HTTP {resp.status_code}",
@@ -53,8 +60,10 @@ def _raise_for_http_error(resp: httpx.Response, operation: str) -> None:
         )
 
 
-TRANSIENT_CODES = {1000, 1001, 1002, 1024, 1033, 2045}
+TRANSIENT_CODES = {1000, 1001, 1002, 1013, 1024, 1033, 2045}
 QUOTA_CODES = {2056}
+CONFIGURATION_CODES = {1004, 1039, 2013}
+CONTENT_REJECTED_CODES = {1026, 1027}
 
 
 def _base_response(data: Any) -> dict:
@@ -85,6 +94,16 @@ def _raise_for_body_error(data: Any, operation: str) -> None:
             f"MiniMax {operation} 暂时不可用 ({code}): {message}",
             retry_after=60.0,
         )
+    if code in CONTENT_REJECTED_CODES:
+        raise ContentRejectedError(
+            f"MiniMax {operation} 内容未通过审核 ({code}): {message}",
+            code=str(code),
+        )
+    if code in CONFIGURATION_CODES:
+        raise ConfigurationError(
+            f"MiniMax {operation} 配置或请求参数错误 ({code}): {message}",
+            code=str(code),
+        )
     raise ProviderError(
         f"MiniMax {operation} 配置或请求错误 ({code}): {message}",
         code=str(code),
@@ -111,6 +130,10 @@ class MiniMaxProvider(BaseProvider):
 
     async def chat(self, messages: list[dict], **kwargs) -> str:
         model = kwargs.pop("model", self.config.text_model or "MiniMax-M3")
+        max_completion_tokens = kwargs.get(
+            "max_completion_tokens",
+            kwargs.get("max_tokens", 1200),
+        )
         async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
             resp = await client.post(
                 self._endpoint("/v1/text/chatcompletion_v2"),
@@ -118,7 +141,7 @@ class MiniMaxProvider(BaseProvider):
                 json={
                     "model": model,
                     "messages": messages,
-                    "max_tokens": kwargs.get("max_tokens", 2048),
+                    "max_completion_tokens": max_completion_tokens,
                     "temperature": kwargs.get("temperature", 0.7),
                 },
             )

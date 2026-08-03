@@ -1,12 +1,21 @@
 import asyncio
 import threading
+import time
 from datetime import timedelta, timezone
 from types import SimpleNamespace
+
+import pytest
 
 from app import models
 from app.clock import utc_now
 from app.services.ai import MemoryBundleCandidate, MemoryQualityScores
-from app.services.ai.worker import AiJobProcessor, _extract_quota_state
+from app.services.ai.base import ConfigurationError
+from app.services.ai.worker import (
+    MEDIA_JOB_KINDS,
+    TEXT_JOB_KINDS,
+    AiJobProcessor,
+    _extract_quota_state,
+)
 from app.services.learning_content import (
     LearningContentResolver,
     queue_ai_job,
@@ -37,7 +46,12 @@ class FakeAiService:
         self.minimax = FakeMiniMax()
         self.text_provider = self.minimax
 
-    async def generate_memory_candidate(self, word, feedback_context=""):
+    async def generate_memory_candidate(
+        self,
+        word,
+        feedback_context="",
+        validation_feedback="",
+    ):
         suffix = "新版" if feedback_context else "初版"
         return MemoryBundleCandidate(
             normalized_pos="名词",
@@ -66,8 +80,73 @@ class SlowAiService(FakeAiService):
         return await super().generate_memory_candidate(word, feedback_context)
 
 
+class SlowMiniMax(FakeMiniMax):
+    async def generate_image(self, prompt):
+        await asyncio.sleep(0.2)
+        return await super().generate_image(prompt)
+
+
+class DualLaneSlowAiService(FakeAiService):
+    def __init__(self, db):
+        super().__init__(db)
+        self.minimax = SlowMiniMax()
+
+    async def generate_memory_candidate(self, word, feedback_context=""):
+        await asyncio.sleep(0.2)
+        return await super().generate_memory_candidate(word, feedback_context)
+
+
+class FatalAiService(FakeAiService):
+    async def generate_memory_candidate(self, word, feedback_context=""):
+        raise ConfigurationError("MiniMax API Key 无效", code="1004")
+
+
+class CorrectingAiService(FakeAiService):
+    calls = []
+
+    async def generate_memory_candidate(
+        self,
+        word,
+        feedback_context="",
+        validation_feedback="",
+    ):
+        self.calls.append(validation_feedback)
+        if not validation_feedback:
+            raise ValueError("memory_anchor exceeds 45 Chinese characters")
+        return await super().generate_memory_candidate(word, feedback_context)
+
+
 def _run(coro):
     return asyncio.run(coro)
+
+
+def test_memory_anchor_limit_counts_chinese_characters_not_punctuation():
+    values = {
+        "normalized_pos": "名词",
+        "primary_meaning": "测试",
+        "strategy": "direct",
+        "scene_summary": "测试画面",
+        "image_prompt": "One clear test object with one red mark, no text or letters.",
+        "narration_text": "名词，测试",
+        "scores": {
+            "meaning_consistency": 5,
+            "association_naturalness": 5,
+            "visual_clarity": 5,
+            "distinctiveness": 5,
+        },
+        "approved": True,
+    }
+
+    candidate = MemoryBundleCandidate(
+        **values,
+        memory_anchor=("一" * 45) + "，。！",
+    )
+    assert len(candidate.memory_anchor) == 48
+    with pytest.raises(ValueError):
+        MemoryBundleCandidate(
+            **values,
+            memory_anchor="一" * 46,
+        )
 
 
 def test_persistent_worker_builds_assets_and_atomically_replaces_feedback(
@@ -397,8 +476,9 @@ def test_dashboard_returns_one_consistent_persistent_snapshot(api, monkeypatch):
     assert payload["jobs"]["pending"] == 1
     assert payload["banks"] == [{
         "id": bank_id,
-        "name": "dashboard",
-        "word_count": 1,
+            "name": "dashboard",
+            "word_count": 1,
+            "revision": 1,
         "bank_id": bank_id,
         "total": 1,
         "text_ready": 0,
@@ -482,4 +562,221 @@ def test_dashboard_polling_does_not_interrupt_running_worker(api, monkeypatch):
     assert session.connection().exec_driver_sql(
         "PRAGMA busy_timeout"
     ).scalar() == 30000
+    session.close()
+
+
+def test_text_and_media_lanes_can_progress_concurrently(api, monkeypatch, tmp_path):
+    from app.services.ai import worker as worker_module
+
+    monkeypatch.setenv("AI_MEDIA_DIR", str(tmp_path / "ai-media"))
+    monkeypatch.setattr(worker_module, "AiService", DualLaneSlowAiService)
+    session = api["session"]()
+    bank = models.WordBank(name="lanes", user_id=api["user_id"], word_count=2)
+    session.add(bank)
+    session.flush()
+    word = models.Word(
+        bank_id=bank.id,
+        seq_num=1,
+        word="parallel",
+        phonetic="",
+        meaning="adj. 并行的",
+    )
+    session.add(word)
+    session.flush()
+    seed_word_evolution(session, word, priority=10)
+    bundle = models.MemoryBundle(
+        lexeme_key="lane-bundle",
+        word_text="picture",
+        normalized_pos="名词",
+        primary_meaning="图片",
+        strategy="direct",
+        memory_anchor="一张图片直接表示图片的含义",
+        scene_summary="桌上一张图片",
+        image_prompt="One printed picture on a plain desk, one red corner, no text.",
+        narration_text="名词，图片",
+        prompt_version="memory-v1",
+        content_version=1,
+        status="active",
+    )
+    session.add(bundle)
+    session.flush()
+    queue_ai_job(
+        session,
+        kind="image",
+        target_type="bundle",
+        target_id=bundle.id,
+        bank_id=bank.id,
+        priority=10,
+        idempotency_key="lane:image",
+    )
+    session.add(models.AiQuotaSnapshot(
+        provider="minimax",
+        remaining_percent=80,
+        status="available",
+        checked_at=utc_now(),
+    ))
+    session.commit()
+    word_id = word.id
+    session.close()
+
+    async def run_lanes():
+        text_session = api["session"]()
+        media_session = api["session"]()
+        try:
+            return await asyncio.gather(
+                AiJobProcessor(text_session).process_next(TEXT_JOB_KINDS),
+                AiJobProcessor(media_session).process_next(MEDIA_JOB_KINDS),
+            )
+        finally:
+            text_session.close()
+            media_session.close()
+
+    started = time.perf_counter()
+    processed = _run(run_lanes())
+    elapsed = time.perf_counter() - started
+
+    assert processed == [True, True]
+    assert elapsed < 0.38
+    session = api["session"]()
+    statuses = dict(
+        session.query(models.AiJob.kind, models.AiJob.status).filter(
+            models.AiJob.idempotency_key.in_((
+                f"word:{word_id}:bundle:memory-v1",
+                "lane:image",
+            )),
+        ).all()
+    )
+    assert statuses == {"bundle_text": "completed", "image": "completed"}
+    session.close()
+
+
+def test_validation_retry_receives_first_error(api, monkeypatch):
+    from app.services.ai import worker as worker_module
+
+    CorrectingAiService.calls.clear()
+    monkeypatch.setattr(worker_module, "AiService", CorrectingAiService)
+    session = api["session"]()
+    bank = models.WordBank(name="correction", user_id=api["user_id"], word_count=1)
+    session.add(bank)
+    session.flush()
+    word = models.Word(
+        bank_id=bank.id,
+        seq_num=1,
+        word="correct",
+        phonetic="",
+        meaning="v. 修正",
+    )
+    session.add(word)
+    session.flush()
+    seed_word_evolution(session, word)
+    session.add(models.AiQuotaSnapshot(
+        provider="minimax",
+        remaining_percent=80,
+        status="available",
+        checked_at=utc_now(),
+    ))
+    session.commit()
+
+    assert _run(AiJobProcessor(session).process_next(TEXT_JOB_KINDS))
+    assert CorrectingAiService.calls == ["", "memory_anchor exceeds 45 Chinese characters"]
+    session.close()
+
+
+def test_only_fatal_configuration_error_pauses_worker_with_reason(api, monkeypatch):
+    from app.services.ai import worker as worker_module
+
+    monkeypatch.setattr(worker_module, "AiService", FatalAiService)
+    session = api["session"]()
+    bank = models.WordBank(name="fatal", user_id=api["user_id"], word_count=1)
+    session.add(bank)
+    session.flush()
+    word = models.Word(
+        bank_id=bank.id,
+        seq_num=1,
+        word="invalid",
+        phonetic="",
+        meaning="adj. 无效的",
+    )
+    session.add(word)
+    session.flush()
+    seed_word_evolution(session, word)
+    session.add(models.AiQuotaSnapshot(
+        provider="minimax",
+        remaining_percent=80,
+        status="available",
+        checked_at=utc_now(),
+    ))
+    session.commit()
+
+    assert not _run(AiJobProcessor(session).process_next(TEXT_JOB_KINDS))
+    flags = session.query(models.FeatureFlags).first()
+    job = session.query(models.AiJob).filter_by(kind="bundle_text").one()
+    assert flags.ai_worker_paused is True
+    assert flags.ai_worker_pause_reason == "MiniMax API Key 无效"
+    assert flags.ai_worker_paused_at is not None
+    assert job.status == "failed"
+    assert job.last_error_code == "1004"
+    session.close()
+
+
+def test_resume_requeues_recoverable_failures_but_not_content_rejections(api):
+    session = api["session"]()
+    now = utc_now()
+    recoverable = models.AiJob(
+        id="recoverable",
+        kind="bundle_text",
+        target_type="word",
+        target_id=1,
+        priority=10,
+        status="failed",
+        attempts=1,
+        available_at=now,
+        idempotency_key="recoverable",
+        last_error_code="content_validation",
+    )
+    rejected = models.AiJob(
+        id="rejected",
+        kind="image",
+        target_type="bundle",
+        target_id=1,
+        priority=10,
+        status="failed",
+        attempts=1,
+        available_at=now,
+        idempotency_key="rejected",
+        last_error_code="1027",
+    )
+    flags = session.query(models.FeatureFlags).first()
+    if not flags:
+        flags = models.FeatureFlags(id=1)
+        session.add(flags)
+    flags.ai_worker_paused = True
+    flags.ai_worker_pause_reason = "旧错误"
+    flags.ai_worker_paused_at = now
+    session.add_all([recoverable, rejected])
+    session.commit()
+    session.close()
+
+    current = api["client"].get(
+        "/api/ai/evolution/worker",
+        headers=api["headers"],
+    ).json()
+    response = api["client"].put(
+        "/api/ai/evolution/worker",
+        headers=api["headers"],
+        json={"paused": False, "expected_revision": current["revision"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["requeued_failed"] == 1
+    session = api["session"]()
+    recoverable = session.get(models.AiJob, "recoverable")
+    rejected = session.get(models.AiJob, "rejected")
+    flags = session.query(models.FeatureFlags).first()
+    assert recoverable.status == "pending"
+    assert recoverable.attempts == 0
+    assert rejected.status == "failed"
+    assert flags.ai_worker_paused is False
+    assert flags.ai_worker_pause_reason is None
+    assert flags.ai_worker_paused_at is None
     session.close()

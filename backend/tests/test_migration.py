@@ -118,6 +118,12 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
         assert "user_input" in {
             row[1] for row in cursor.execute("PRAGMA table_info(study_records)")
         }
+        feature_columns = {
+            row[1] for row in cursor.execute("PRAGMA table_info(feature_flags)")
+        }
+        assert {"ai_worker_pause_reason", "ai_worker_paused_at"}.issubset(
+            feature_columns
+        )
         assert "ix_ai_jobs_bank_status" in {
             row[1] for row in cursor.execute("PRAGMA index_list(ai_jobs)").fetchall()
         }
@@ -138,7 +144,17 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
             "memory_exposures",
             "ai_jobs",
             "ai_quota_snapshots",
+            "system_state",
+            "admin_audit_logs",
         }.issubset(tables)
+        for table in ("word_banks", "api_configs", "feature_flags", "word_memory_links"):
+            columns = {
+                row[1] for row in cursor.execute(f"PRAGMA table_info({table})")
+            }
+            assert "revision" in columns
+        assert cursor.execute(
+            "SELECT revision FROM word_banks WHERE id = 1"
+        ).fetchone() == (1,)
         minimax = cursor.execute(
             """
             SELECT api_key_encrypted, api_base, text_model, image_model, speech_model

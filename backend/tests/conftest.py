@@ -48,6 +48,7 @@ def api(tmp_path):
             db.close()
 
     app.dependency_overrides[get_db] = override_db
+    app.state.session_factory = testing_session
     client = TestClient(app)
 
     db = testing_session()
@@ -74,6 +75,8 @@ def api(tmp_path):
     }
 
     app.dependency_overrides.clear()
+    if hasattr(app.state, "session_factory"):
+        del app.state.session_factory
     client.close()
     engine.dispose()
 

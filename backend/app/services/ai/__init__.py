@@ -7,7 +7,13 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from sqlalchemy.orm import Session
 
-from .base import BaseProvider, ProviderConfig, ProviderError, RateLimitError
+from .base import (
+    BaseProvider,
+    ConfigurationError,
+    ProviderConfig,
+    ProviderError,
+    RateLimitError,
+)
 from .deepseek import DeepSeekProvider
 from .minimax import MiniMaxProvider
 from .secrets import decrypt_secret
@@ -36,7 +42,7 @@ class MemoryBundleCandidate(BaseModel):
     normalized_pos: Optional[str] = None
     primary_meaning: str = Field(min_length=1, max_length=48)
     strategy: Literal["direct", "metaphor", "natural_homophone"]
-    memory_anchor: str = Field(min_length=1, max_length=45)
+    memory_anchor: str = Field(min_length=1, max_length=80)
     scene_summary: str = Field(min_length=1, max_length=120)
     image_prompt: str = Field(min_length=20, max_length=800)
     narration_text: str = Field(min_length=1, max_length=64)
@@ -56,6 +62,13 @@ class MemoryBundleCandidate(BaseModel):
     def require_english_image_prompt(cls, value: str) -> str:
         if re.search(r"[\u3400-\u9fff]", value):
             raise ValueError("image_prompt must be English")
+        return value
+
+    @field_validator("memory_anchor")
+    @classmethod
+    def keep_memory_anchor_short(cls, value: str) -> str:
+        if len(re.findall(r"[\u3400-\u9fff]", value)) > 45:
+            raise ValueError("memory_anchor exceeds 45 Chinese characters")
         return value
 
     @field_validator("narration_text")
@@ -129,6 +142,7 @@ class AiService:
         word: models.Word,
         *,
         feedback_context: str = "",
+        validation_feedback: str = "",
     ) -> MemoryBundleCandidate:
         """Generate one strictly validated memory plan; callers own retry policy."""
 
@@ -138,7 +152,7 @@ class AiService:
             if provider is not None
         ]
         if not providers:
-            raise ProviderError(
+            raise ConfigurationError(
                 "MiniMax/DeepSeek 文本模型未配置",
                 code="not_configured",
             )
@@ -153,39 +167,36 @@ class AiService:
                 if feedback_context
                 else ""
             ),
+            validation_feedback=(
+                f"上一次输出未通过校验：{validation_feedback}。只修正这些问题后重新输出完整 JSON。"
+                if validation_feedback
+                else ""
+            ),
         )
         messages = [
             {
                 "role": "system",
-                "content": "你是严谨的词汇记忆内容编辑，只输出符合指定 Schema 的 JSON。",
+                "content": "你是严谨的词汇记忆内容编辑。这是短小的结构化编辑任务，不需要深度推理，只输出符合 Schema 的 JSON。",
             },
             {"role": "user", "content": prompt},
         ]
-        data = None
-        selected_provider = None
-        last_provider_error = None
+        last_error = None
         for provider in providers:
             try:
-                data = await provider.chat_json(
-                    messages,
-                    temperature=0.45,
-                    max_tokens=1600,
-                )
-                selected_provider = provider
-                break
-            except (ProviderError, RateLimitError) as exc:
-                last_provider_error = exc
-        if data is None:
-            raise last_provider_error or ProviderError("文字模型调用失败")
-        candidate = MemoryBundleCandidate.model_validate(data)
-        candidate._generation_model = (
-            selected_provider.config.text_model
-            if selected_provider
-            else None
-        )
-        if not candidate.quality_passed():
-            raise ValueError("AI 记忆方案质量评分未达到 4/5")
-        return candidate
+                options = {"temperature": 0.35}
+                if isinstance(provider, MiniMaxProvider):
+                    options["max_completion_tokens"] = 1200
+                else:
+                    options["max_tokens"] = 1200
+                data = await provider.chat_json(messages, **options)
+                candidate = MemoryBundleCandidate.model_validate(data)
+                if not candidate.quality_passed():
+                    raise ValueError("AI 记忆方案质量评分未达到 4/5")
+                candidate._generation_model = provider.config.text_model
+                return candidate
+            except (ProviderError, RateLimitError, ValueError, TypeError, RuntimeError) as exc:
+                last_error = exc
+        raise last_error or ProviderError("文字模型调用失败")
 
     # ========== 单词增强 ==========
 

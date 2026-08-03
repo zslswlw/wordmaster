@@ -41,6 +41,7 @@ def test_api_key_is_encrypted_and_blank_update_preserves_it(api):
 
     payload["api_key"] = None
     payload["speech_model"] = "speech-2.8-hd"
+    payload["expected_revision"] = listed.json()[0]["revision"]
     updated = api["client"].post(
         "/api/settings/ai-configs",
         headers=api["headers"],

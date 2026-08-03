@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import hashlib
 import io
 import json
@@ -12,7 +12,14 @@ from pydantic import BaseModel
 
 from .. import models
 from ..models import get_db, User, WordBank, Word, StudyGroup, StudyRecord, ReviewPlan
-from ..auth import get_current_user
+from ..auth import get_admin_user, get_current_user
+from ..admin_consistency import (
+    MaintenanceLocked,
+    audit_admin_action,
+    get_system_state,
+    utc_iso,
+)
+from ..clock import utc_now
 from ..services.ai.worker import media_root
 from ..services.learning_content import queue_ai_job, seed_word_evolution
 
@@ -171,8 +178,8 @@ def _memory_export(db: Session, user_id: int, bank_ids: set[int]) -> dict:
             "quality_scores": row.quality_scores,
             "status": row.status,
             "source_bundle_id": row.source_bundle_id,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "created_at": utc_iso(row.created_at),
+            "updated_at": utc_iso(row.updated_at),
         } for row in bundles],
         "assets": [{
             "id": row.id,
@@ -185,7 +192,7 @@ def _memory_export(db: Session, user_id: int, bank_ids: set[int]) -> dict:
             "model": row.model,
             "generation_params": row.generation_params,
             "status": row.status,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "created_at": utc_iso(row.created_at),
         } for row in assets],
         "links": [{
             "word_id": row.word_id,
@@ -202,8 +209,8 @@ def _memory_export(db: Session, user_id: int, bank_ids: set[int]) -> dict:
             "status": row.status,
             "replacement_bundle_id": row.replacement_bundle_id,
             "auto_attempts": row.auto_attempts,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
+            "created_at": utc_iso(row.created_at),
+            "resolved_at": utc_iso(row.resolved_at),
         } for row in feedback],
         "exposures": [{
             "word_id": row.word_id,
@@ -211,7 +218,7 @@ def _memory_export(db: Session, user_id: int, bank_ids: set[int]) -> dict:
             "group_id": row.group_id,
             "plan_id": row.plan_id,
             "study_type": row.study_type,
-            "exposed_at": row.exposed_at.isoformat() if row.exposed_at else None,
+            "exposed_at": utc_iso(row.exposed_at),
             "next_result": row.next_result,
         } for row in exposures],
         "jobs": [{
@@ -231,7 +238,13 @@ def _memory_export(db: Session, user_id: int, bank_ids: set[int]) -> dict:
 def _parse_datetime(value, fallback=None):
     if not value:
         return fallback
-    return datetime.fromisoformat(value)
+    normalized = str(value)
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def _restore_memory(
@@ -321,6 +334,8 @@ def _restore_memory(
         if not link:
             link = models.WordMemoryLink(word_id=word_id)
             db.add(link)
+        else:
+            link.revision = (link.revision or 1) + 1
         link.active_bundle_id = bundle_id
         link.status = item.get("status", "ready")
 
@@ -509,8 +524,8 @@ def export_data(
             "start_seq": group.start_seq,
             "end_seq": group.end_seq,
             "status": group.status,
-            "created_at": group.created_at.isoformat() if group.created_at else None,
-            "completed_at": group.completed_at.isoformat() if group.completed_at else None,
+            "created_at": utc_iso(group.created_at),
+            "completed_at": utc_iso(group.completed_at),
             "records": [
                 {
                     "id": r.id,
@@ -520,7 +535,7 @@ def export_data(
                     "study_type": r.study_type,
                     "plan_id": r.plan_id,
                     "user_input": r.user_input,
-                    "studied_at": r.studied_at.isoformat() if r.studied_at else None
+                    "studied_at": utc_iso(r.studied_at)
                 }
                 for r in records
             ],
@@ -532,7 +547,7 @@ def export_data(
                     "review_round": p.review_round,
                     "status": p.status,
                     "postponed_days": p.postponed_days,
-                    "completed_at": p.completed_at.isoformat() if p.completed_at else None
+                    "completed_at": utc_iso(p.completed_at)
                 }
                 for p in plans
             ]
@@ -540,7 +555,7 @@ def export_data(
     
     export_data = {
         "username": current_user.username,
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": utc_iso(utc_now()),
         "banks": bank_data,
         "groups": group_data,
         "memory": _memory_export(db, user_id, set(bank_by_id)),
@@ -584,7 +599,7 @@ def export_full_backup(
             json.dumps(
                 {
                     "format": "wordmaster-full-backup-v1",
-                    "created_at": datetime.utcnow().isoformat(),
+                    "created_at": utc_iso(utc_now()),
                     "files": files,
                 },
                 ensure_ascii=False,
@@ -600,11 +615,10 @@ def export_full_backup(
     )
 
 
-@router.post("/import")
-async def import_data(
+async def _restore_import_data(
     request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session,
+    current_user: User,
 ):
     payload = await _read_import_payload(request)
     data = ImportData.model_validate(payload)
@@ -676,8 +690,8 @@ async def import_data(
             start_seq=group_info["start_seq"],
             end_seq=group_info["end_seq"],
             status=group_info.get("status", "new"),
-            created_at=datetime.fromisoformat(group_info["created_at"]) if group_info.get("created_at") else datetime.utcnow(),
-            completed_at=datetime.fromisoformat(group_info["completed_at"]) if group_info.get("completed_at") else None
+            created_at=_parse_datetime(group_info.get("created_at"), datetime.utcnow()),
+            completed_at=_parse_datetime(group_info.get("completed_at")),
         )
         db.add(group)
         db.flush()
@@ -717,7 +731,7 @@ async def import_data(
                 review_round=review_round,
                 status="completed" if completed_sources else p.get("status", "pending"),
                 postponed_days=max((item.get("postponed_days", 0) or 0) for item in source_plans),
-                completed_at=datetime.fromisoformat(completed_dates[0]) if completed_dates else None
+                completed_at=_parse_datetime(completed_dates[0]) if completed_dates else None
             )
             db.add(plan)
             db.flush()
@@ -750,7 +764,7 @@ async def import_data(
                 study_type=study_type,
                 plan_id=plan_id,
                 user_input=r.get("user_input"),
-                studied_at=datetime.fromisoformat(r["studied_at"]) if r.get("studied_at") else datetime.utcnow()
+                studied_at=_parse_datetime(r.get("studied_at"), datetime.utcnow())
             )
             db.add(record)
 
@@ -766,3 +780,87 @@ async def import_data(
     db.commit()
     
     return {"message": "Data imported successfully"}
+
+
+def _finish_maintenance(
+    db: Session,
+    previous_worker: dict,
+) -> None:
+    state = get_system_state(db)
+    state.maintenance_mode = False
+    state.maintenance_reason = None
+    flags = db.query(models.FeatureFlags).first()
+    if flags:
+        flags.ai_worker_paused = previous_worker["paused"]
+        flags.ai_worker_pause_reason = previous_worker["pause_reason"]
+        flags.ai_worker_paused_at = previous_worker["paused_at"]
+        flags.revision = (flags.revision or 1) + 1
+    db.query(models.AiJob).filter(models.AiJob.status == "running").update(
+        {
+            "status": "pending",
+            "available_at": utc_now(),
+            "updated_at": utc_now(),
+        },
+        synchronize_session=False,
+    )
+
+
+@router.post("/import")
+async def import_data(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_admin_user),
+):
+    state = get_system_state(db)
+    if state.maintenance_mode:
+        raise MaintenanceLocked(state.maintenance_reason)
+    flags = db.query(models.FeatureFlags).first()
+    if not flags:
+        flags = models.FeatureFlags(id=1)
+        db.add(flags)
+        db.flush()
+    previous_worker = {
+        "paused": bool(flags.ai_worker_paused),
+        "pause_reason": flags.ai_worker_pause_reason,
+        "paused_at": flags.ai_worker_paused_at,
+    }
+    state.maintenance_mode = True
+    state.maintenance_reason = "管理员正在恢复备份"
+    state.maintenance_started_by = admin.id
+    state.maintenance_started_at = utc_now()
+    flags.ai_worker_paused = True
+    flags.ai_worker_pause_reason = "备份恢复期间暂停"
+    flags.ai_worker_paused_at = utc_now()
+    flags.revision = (flags.revision or 1) + 1
+    db.commit()
+
+    try:
+        result = await _restore_import_data(request, db, admin)
+    except Exception as exc:
+        db.rollback()
+        _finish_maintenance(db, previous_worker)
+        audit_admin_action(
+            db,
+            request,
+            admin,
+            action="backup.restore.failed",
+            target_type="backup",
+            after={"success": False, "error": str(exc)[:500]},
+        )
+        db.commit()
+        raise
+
+    _finish_maintenance(db, previous_worker)
+    audit_admin_action(
+        db,
+        request,
+        admin,
+        action="backup.restore",
+        target_type="backup",
+        after={
+            "success": True,
+            "banks": len(result.get("banks", [])) if isinstance(result, dict) else None,
+        },
+    )
+    db.commit()
+    return result

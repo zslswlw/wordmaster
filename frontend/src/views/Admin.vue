@@ -8,6 +8,7 @@
       <el-tab-pane name="banks" label="词库" />
       <el-tab-pane name="ai" label="AI 配置" />
       <el-tab-pane name="audio" label="音频" />
+      <el-tab-pane name="security" label="管理员与审计" />
     </el-tabs>
 
     <div class="tab-content">
@@ -25,13 +26,19 @@ import { useAuth } from '../composables/useAuth'
 import BanksView from './Banks.vue'
 import SettingsView from './Settings.vue'
 import AudioManageView from './AudioManage.vue'
+import AdminUsersView from './AdminUsers.vue'
 
 const router = useRouter()
 const { isAdmin } = useAuth()
 const activeTab = ref('banks')
 
 const currentTab = computed(() => {
-  const map: Record<string, any> = { banks: BanksView, ai: SettingsView, audio: AudioManageView }
+  const map: Record<string, any> = {
+    banks: BanksView,
+    ai: SettingsView,
+    audio: AudioManageView,
+    security: AdminUsersView,
+  }
   return map[activeTab.value]
 })
 

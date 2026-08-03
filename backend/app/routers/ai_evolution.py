@@ -3,15 +3,17 @@ import re
 from datetime import timedelta
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..auth import get_admin_user, get_current_user
 from ..clock import utc_now
-from ..services.ai.worker import silent_worker_status
+from ..admin_consistency import RevisionConflict, audit_admin_action, utc_iso
+from ..services.ai.worker import AiJobProcessor, silent_worker_status
 from ..services.learning_content import (
     MeaningNormalizer,
     build_lexeme_key,
@@ -51,6 +53,7 @@ class ExposureCreate(BaseModel):
 
 
 class WorkerUpdate(BaseModel):
+    expected_revision: int
     paused: Optional[bool] = None
     quota_reserve_percent: Optional[int] = Field(default=None, ge=0, le=95)
     feedback_reserve_percent: Optional[int] = Field(default=None, ge=0, le=95)
@@ -68,6 +71,20 @@ class BundleEdit(BaseModel):
         if value and re.search(r"[\u3400-\u9fff]", value):
             raise ValueError("图片提示词应使用英文")
         return value
+
+
+class BundleActivation(BaseModel):
+    expected_active_bundle_id: Optional[int] = Field(...)
+
+
+def _api_value(value):
+    if hasattr(value, "tzinfo"):
+        return utc_iso(value)
+    if isinstance(value, dict):
+        return {key: _api_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_api_value(item) for item in value]
+    return value
 
     @field_validator("narration_text")
     @classmethod
@@ -99,7 +116,12 @@ def _json_or_none(value: Optional[str]):
         return None
 
 
-def _job_summary(db: Session, bank_id: Optional[int] = None) -> dict:
+def _job_summary(
+    db: Session,
+    bank_id: Optional[int] = None,
+    *,
+    detailed: bool = True,
+) -> dict:
     query = db.query(models.AiJob)
     if bank_id is not None:
         query = query.filter(models.AiJob.bank_id == bank_id)
@@ -111,17 +133,22 @@ def _job_summary(db: Session, bank_id: Optional[int] = None) -> dict:
             func.count(models.AiJob.id),
         ).group_by(models.AiJob.status).all()
     }
-    current = query.filter(
+    current_jobs = query.filter(
         models.AiJob.status == "running",
-    ).order_by(models.AiJob.updated_at.desc()).first()
+    ).order_by(models.AiJob.updated_at.desc()).all()
     next_job = query.filter(
         models.AiJob.status == "pending",
     ).order_by(
         models.AiJob.priority.asc(),
         models.AiJob.available_at.asc(),
     ).first()
-    latest = query.order_by(models.AiJob.updated_at.desc()).first()
-    if current:
+    latest_success = query.filter(
+        models.AiJob.status == "completed",
+    ).order_by(models.AiJob.updated_at.desc()).first()
+    latest_failure = query.filter(
+        models.AiJob.status == "failed",
+    ).order_by(models.AiJob.updated_at.desc()).first()
+    if current_jobs:
         state = "running"
     elif counts.get("pending", 0):
         state = "queued"
@@ -140,20 +167,61 @@ def _job_summary(db: Session, bank_id: Optional[int] = None) -> dict:
             "target_id": job.target_id,
             "bank_id": job.bank_id,
             "attempts": job.attempts,
-            "available_at": job.available_at,
-            "updated_at": job.updated_at,
+            "available_at": utc_iso(job.available_at),
+            "updated_at": utc_iso(job.updated_at),
             "last_error_code": job.last_error_code,
             "last_error_message": job.last_error_message,
         }
 
-    return {
+    result = {
         "state": state,
         "counts": counts,
         "active_jobs": counts.get("pending", 0) + counts.get("running", 0),
-        "current_job": serialize(current),
+        "current_job": serialize(current_jobs[0]) if current_jobs else None,
+        "current_jobs": [serialize(job) for job in current_jobs],
         "next_job": serialize(next_job),
-        "last_activity_at": latest.updated_at if latest else None,
+        "last_activity_at": utc_iso(latest_success.updated_at) if latest_success else None,
+        "last_failure_at": utc_iso(latest_failure.updated_at) if latest_failure else None,
+        "latest_failure": serialize(latest_failure),
     }
+    if not detailed:
+        return result
+
+    by_kind: dict[str, dict[str, int]] = {}
+    for kind, status, count in query.with_entities(
+        models.AiJob.kind,
+        models.AiJob.status,
+        func.count(models.AiJob.id),
+    ).group_by(models.AiJob.kind, models.AiJob.status).all():
+        by_kind.setdefault(kind, {})[status] = int(count)
+
+    completed_24h = {
+        kind: int(count)
+        for kind, count in query.filter(
+            models.AiJob.status == "completed",
+            models.AiJob.updated_at >= utc_now() - timedelta(hours=24),
+        ).with_entities(
+            models.AiJob.kind,
+            func.count(models.AiJob.id),
+        ).group_by(models.AiJob.kind).all()
+    }
+    failed_by_code = {
+        (code or "unknown"): int(count)
+        for code, count in query.filter(
+            models.AiJob.status == "failed",
+        ).with_entities(
+            models.AiJob.last_error_code,
+            func.count(models.AiJob.id),
+        ).group_by(models.AiJob.last_error_code).order_by(
+            func.count(models.AiJob.id).desc(),
+        ).limit(8).all()
+    }
+    result.update({
+        "by_kind": by_kind,
+        "completed_24h": completed_24h,
+        "failed_by_code": failed_by_code,
+    })
+    return result
 
 
 def _quota_payload(db: Session) -> dict:
@@ -165,16 +233,17 @@ def _quota_payload(db: Session) -> dict:
     return {
         "status": snapshot.status,
         "remaining_percent": snapshot.remaining_percent,
-        "reset_at": snapshot.reset_at,
-        "checked_at": snapshot.checked_at,
+        "reset_at": utc_iso(snapshot.reset_at),
+        "checked_at": utc_iso(snapshot.checked_at),
     }
 
 
 def _worker_payload(db: Session) -> dict:
     flags = _flags(db)
     queue = _job_summary(db)
-    runtime = silent_worker_status()
-    heartbeat = runtime.get("heartbeat_at")
+    raw_runtime = silent_worker_status()
+    runtime = _api_value(raw_runtime)
+    heartbeat = raw_runtime.get("heartbeat_at")
     heartbeat_stale = (
         heartbeat is None
         or utc_now() - heartbeat > timedelta(seconds=20)
@@ -202,6 +271,9 @@ def _worker_payload(db: Session) -> dict:
 
     return {
         "paused": flags.ai_worker_paused,
+        "pause_reason": flags.ai_worker_pause_reason,
+        "paused_at": utc_iso(flags.ai_worker_paused_at),
+        "revision": flags.revision,
         "state": state,
         "quota_reserve_percent": flags.quota_reserve_percent,
         "feedback_reserve_percent": flags.feedback_reserve_percent,
@@ -329,7 +401,7 @@ def list_feedback(
             "status": row.status,
             "replacement_bundle_id": row.replacement_bundle_id,
             "auto_attempts": row.auto_attempts,
-            "created_at": row.created_at,
+            "created_at": utc_iso(row.created_at),
         })
     return result
 
@@ -347,7 +419,12 @@ def word_versions(
         models.WordMemoryLink.word_id == word_id,
     ).first()
     if not link or not link.active_bundle_id:
-        return {"word_id": word_id, "active_bundle_id": None, "items": []}
+        return {
+            "word_id": word_id,
+            "active_bundle_id": None,
+            "link_revision": link.revision if link else 0,
+            "items": [],
+        }
     active = db.query(models.MemoryBundle).filter(
         models.MemoryBundle.id == link.active_bundle_id,
     ).first()
@@ -357,6 +434,7 @@ def word_versions(
     return {
         "word_id": word_id,
         "active_bundle_id": link.active_bundle_id,
+        "link_revision": link.revision,
         "items": [{
             "id": row.id,
             "version": row.content_version,
@@ -471,8 +549,8 @@ def list_jobs(
                 "attempts": job.attempts,
                 "last_error_code": job.last_error_code,
                 "last_error_message": job.last_error_message,
-                "available_at": job.available_at,
-                "updated_at": job.updated_at,
+                "available_at": utc_iso(job.available_at),
+                "updated_at": utc_iso(job.updated_at),
             }
             for job in jobs
         ],
@@ -503,15 +581,16 @@ def evolution_dashboard(
             "id": bank.id,
             "name": bank.name,
             "word_count": bank.word_count,
+            "revision": bank.revision,
             **coverage,
-            "queue": _job_summary(db, bank.id),
+            "queue": _job_summary(db, bank.id, detailed=False),
         })
     feedback_count = db.query(func.count(models.MemoryFeedback.id)).filter(
         models.MemoryFeedback.status.in_(["pending", "generating", "manual_review"]),
     ).scalar() or 0
     worker = _worker_payload(db)
     return {
-        "observed_at": utc_now(),
+        "observed_at": utc_iso(utc_now()),
         "worker": worker,
         "jobs": worker["queue"]["counts"],
         "quota": _quota_payload(db),
@@ -520,24 +599,120 @@ def evolution_dashboard(
     }
 
 
+def _worker_config_snapshot(flags: models.FeatureFlags) -> dict:
+    return {
+        "paused": bool(flags.ai_worker_paused),
+        "pause_reason": flags.ai_worker_pause_reason,
+        "paused_at": utc_iso(flags.ai_worker_paused_at),
+        "quota_reserve_percent": flags.quota_reserve_percent,
+        "feedback_reserve_percent": flags.feedback_reserve_percent,
+        "priority_bank_id": flags.priority_bank_id,
+        "revision": flags.revision,
+    }
+
+
+@router.patch("/worker")
 @router.put("/worker")
 def update_worker(
     data: WorkerUpdate,
+    request: Request,
     db: Session = Depends(models.get_db),
     admin: models.User = Depends(get_admin_user),
 ):
     flags = _flags(db)
     values = data.model_dump(exclude_unset=True)
+    values.pop("expected_revision", None)
     if "priority_bank_id" in values and values["priority_bank_id"] is not None:
         bank = db.query(models.WordBank).filter(
             models.WordBank.id == values["priority_bank_id"],
         ).first()
         if not bank:
             raise HTTPException(404, "优先词库不存在")
-    for key, value in values.items():
-        setattr(flags, key if key != "paused" else "ai_worker_paused", value)
+    requested_pause = values.pop("paused", None)
+    values = {
+        key: value
+        for key, value in values.items()
+        if value is not None or key == "priority_bank_id"
+    }
+    update_values = dict(values)
+    if requested_pause is True:
+        update_values.update({
+            "ai_worker_paused": True,
+            "ai_worker_pause_reason": "管理员手动暂停",
+            "ai_worker_paused_at": utc_now(),
+        })
+    elif requested_pause is False:
+        update_values.update({
+            "ai_worker_paused": False,
+            "ai_worker_pause_reason": None,
+            "ai_worker_paused_at": None,
+        })
+
+    before = _worker_config_snapshot(flags)
+    already_applied = all(
+        getattr(flags, key) == value
+        for key, value in update_values.items()
+        if key != "ai_worker_paused_at"
+    )
+    if data.expected_revision != flags.revision and not already_applied:
+        raise RevisionConflict(_worker_payload(db))
+
+    changed = bool(update_values) and not already_applied
+    if changed:
+        updated = db.query(models.FeatureFlags).filter(
+            models.FeatureFlags.id == flags.id,
+            models.FeatureFlags.revision == data.expected_revision,
+        ).update(
+            {**update_values, "revision": models.FeatureFlags.revision + 1},
+            synchronize_session=False,
+        )
+        if updated != 1:
+            db.rollback()
+            raise RevisionConflict(_worker_payload(db))
+        db.expire_all()
+        flags = _flags(db)
+
+    requeued_failed = 0
+    if requested_pause is False:
+        requeued_failed = AiJobProcessor(db).requeue_failed(commit=False)
+    action = (
+        "ai_worker.pause" if requested_pause is True
+        else "ai_worker.resume" if requested_pause is False
+        else "ai_worker.config.update"
+    )
+    audit_admin_action(
+        db,
+        request,
+        admin,
+        action=action,
+        target_type="ai_worker",
+        target_id=flags.id,
+        before=before,
+        after={**_worker_config_snapshot(flags), "requeued_failed": requeued_failed},
+    )
     db.commit()
-    return get_worker(db=db, admin=admin)
+    payload = _worker_payload(db)
+    payload["requeued_failed"] = requeued_failed
+    return payload
+
+
+@router.post("/jobs/retry-failed")
+def retry_failed_jobs(
+    request: Request,
+    db: Session = Depends(models.get_db),
+    admin: models.User = Depends(get_admin_user),
+):
+    count = AiJobProcessor(db).requeue_failed(commit=False)
+    audit_admin_action(
+        db,
+        request,
+        admin,
+        action="ai_jobs.retry_failed",
+        target_type="ai_job_queue",
+        after={"requeued": count},
+    )
+    db.commit()
+    return {"requeued": count, "worker": _worker_payload(db)}
 
 
 @router.post("/words/{word_id}/regenerate")
@@ -584,6 +759,7 @@ def regenerate_word(
 def edit_bundle(
     bundle_id: int,
     data: BundleEdit,
+    request: Request,
     db: Session = Depends(models.get_db),
     admin: models.User = Depends(get_admin_user),
 ):
@@ -595,28 +771,39 @@ def edit_bundle(
     values = data.model_dump(exclude_unset=True)
     if not values:
         raise HTTPException(400, "没有需要修改的字段")
-    latest = db.query(models.MemoryBundle).filter(
-        models.MemoryBundle.lexeme_key == source.lexeme_key,
-    ).order_by(models.MemoryBundle.content_version.desc()).first()
-    replacement = models.MemoryBundle(
-        lexeme_key=source.lexeme_key,
-        word_text=source.word_text,
-        normalized_pos=source.normalized_pos,
-        primary_meaning=source.primary_meaning,
-        strategy=source.strategy,
-        memory_anchor=values.get("memory_anchor", source.memory_anchor),
-        scene_summary=source.scene_summary,
-        image_prompt=values.get("image_prompt", source.image_prompt),
-        narration_text=values.get("narration_text", source.narration_text),
-        prompt_version=f"{source.prompt_version}-admin",
-        content_version=(latest.content_version if latest else 0) + 1,
-        text_model="admin",
-        quality_scores=source.quality_scores,
-        status="draft",
-        source_bundle_id=source.id,
-    )
-    db.add(replacement)
-    db.flush()
+    replacement = None
+    for _attempt in range(5):
+        latest = db.query(models.MemoryBundle).filter(
+            models.MemoryBundle.lexeme_key == source.lexeme_key,
+        ).order_by(models.MemoryBundle.content_version.desc()).first()
+        replacement = models.MemoryBundle(
+            lexeme_key=source.lexeme_key,
+            word_text=source.word_text,
+            normalized_pos=source.normalized_pos,
+            primary_meaning=source.primary_meaning,
+            strategy=source.strategy,
+            memory_anchor=values.get("memory_anchor", source.memory_anchor),
+            scene_summary=source.scene_summary,
+            image_prompt=values.get("image_prompt", source.image_prompt),
+            narration_text=values.get("narration_text", source.narration_text),
+            prompt_version=f"{source.prompt_version}-admin",
+            content_version=(latest.content_version if latest else 0) + 1,
+            text_model="admin",
+            quality_scores=source.quality_scores,
+            status="draft",
+            source_bundle_id=source.id,
+        )
+        db.add(replacement)
+        try:
+            db.flush()
+            break
+        except IntegrityError:
+            db.rollback()
+            source = db.query(models.MemoryBundle).filter(
+                models.MemoryBundle.id == bundle_id,
+            ).first()
+    else:
+        raise HTTPException(409, "版本号竞争频繁，请稍后重试")
     source_assets = db.query(models.MemoryAsset).filter(
         models.MemoryAsset.bundle_id == source.id,
         models.MemoryAsset.status == "ready",
@@ -663,6 +850,20 @@ def edit_bundle(
             priority=0,
             idempotency_key=f"bundle:{replacement.id}:{asset_type}:v1",
         )
+    audit_admin_action(
+        db,
+        request,
+        admin,
+        action="memory_bundle.draft.create",
+        target_type="memory_bundle",
+        target_id=replacement.id,
+        before={"source_bundle_id": source.id, "version": source.content_version},
+        after={
+            "bundle_id": replacement.id,
+            "version": replacement.content_version,
+            "changed_fields": sorted(values),
+        },
+    )
     db.commit()
     db.refresh(replacement)
     return {"bundle_id": replacement.id, "status": replacement.status}
@@ -672,8 +873,31 @@ def edit_bundle(
 def activate_bundle(
     word_id: int,
     bundle_id: int,
+    data: BundleActivation,
+    request: Request,
     db: Session = Depends(models.get_db),
     admin: models.User = Depends(get_admin_user),
+):
+    return _change_active_bundle(
+        word_id=word_id,
+        bundle_id=bundle_id,
+        expected_active_bundle_id=data.expected_active_bundle_id,
+        action="memory_bundle.activate",
+        request=request,
+        db=db,
+        admin=admin,
+    )
+
+
+def _change_active_bundle(
+    *,
+    word_id: int,
+    bundle_id: int,
+    expected_active_bundle_id: Optional[int],
+    action: str,
+    request: Request,
+    db: Session,
+    admin: models.User,
 ):
     word = db.query(models.Word).filter(models.Word.id == word_id).first()
     target = db.query(models.MemoryBundle).filter(
@@ -708,9 +932,72 @@ def activate_bundle(
         if current_bundle and current_bundle.lexeme_key != target.lexeme_key:
             raise HTTPException(409, "记忆包词义与当前单词不一致")
     if not link:
-        link = models.WordMemoryLink(word_id=word_id)
+        if expected_active_bundle_id is not None:
+            raise RevisionConflict({"active_bundle_id": None, "link_revision": 0})
+        link = models.WordMemoryLink(word_id=word_id, revision=1)
         db.add(link)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            link = db.query(models.WordMemoryLink).filter(
+                models.WordMemoryLink.word_id == word_id,
+            ).first()
+            if not link or link.active_bundle_id != expected_active_bundle_id:
+                raise RevisionConflict({
+                    "active_bundle_id": link.active_bundle_id if link else None,
+                    "link_revision": link.revision if link else 0,
+                })
     previous_id = link.active_bundle_id
+    if previous_id != expected_active_bundle_id:
+        raise RevisionConflict({
+            "active_bundle_id": previous_id,
+            "link_revision": link.revision,
+        })
+    if previous_id == target.id:
+        audit_admin_action(
+            db,
+            request,
+            admin,
+            action=action,
+            target_type="word_memory_link",
+            target_id=link.id,
+            before={"word_id": word_id, "active_bundle_id": previous_id},
+            after={"word_id": word_id, "active_bundle_id": previous_id, "no_change": True},
+        )
+        db.commit()
+        return {
+            "bundle_id": target.id,
+            "status": "active",
+            "link_revision": link.revision,
+        }
+
+    active_filter = (
+        models.WordMemoryLink.active_bundle_id.is_(None)
+        if previous_id is None
+        else models.WordMemoryLink.active_bundle_id == previous_id
+    )
+    updated = db.query(models.WordMemoryLink).filter(
+        models.WordMemoryLink.id == link.id,
+        active_filter,
+    ).update(
+        {
+            "active_bundle_id": target.id,
+            "status": "ready",
+            "updated_at": utc_now(),
+            "revision": models.WordMemoryLink.revision + 1,
+        },
+        synchronize_session=False,
+    )
+    if updated != 1:
+        db.rollback()
+        current = db.query(models.WordMemoryLink).filter(
+            models.WordMemoryLink.word_id == word_id,
+        ).first()
+        raise RevisionConflict({
+            "active_bundle_id": current.active_bundle_id if current else None,
+            "link_revision": current.revision if current else 0,
+        })
     if previous_id and previous_id != target.id:
         previous = db.query(models.MemoryBundle).filter(
             models.MemoryBundle.id == previous_id,
@@ -718,9 +1005,6 @@ def activate_bundle(
         if previous:
             previous.status = "archived"
     target.status = "active"
-    link.active_bundle_id = target.id
-    link.status = "ready"
-    link.updated_at = utc_now()
     if previous_id:
         db.query(models.WordMemoryLink).filter(
             models.WordMemoryLink.active_bundle_id == previous_id,
@@ -729,6 +1013,7 @@ def activate_bundle(
                 "active_bundle_id": target.id,
                 "status": "ready",
                 "updated_at": utc_now(),
+                "revision": models.WordMemoryLink.revision + 1,
             },
             synchronize_session=False,
         )
@@ -740,20 +1025,48 @@ def activate_bundle(
         feedback.status = "resolved"
         feedback.replacement_bundle_id = target.id
         feedback.resolved_at = utc_now()
+    db.flush()
+    db.expire_all()
+    current_link = db.query(models.WordMemoryLink).filter(
+        models.WordMemoryLink.word_id == word_id,
+    ).first()
+    audit_admin_action(
+        db,
+        request,
+        admin,
+        action=action,
+        target_type="word_memory_link",
+        target_id=current_link.id,
+        before={"word_id": word_id, "active_bundle_id": previous_id},
+        after={
+            "word_id": word_id,
+            "active_bundle_id": target.id,
+            "link_revision": current_link.revision,
+        },
+    )
     db.commit()
-    return {"bundle_id": target.id, "status": "active"}
+    return {
+        "bundle_id": target.id,
+        "status": "active",
+        "link_revision": current_link.revision,
+    }
 
 
 @router.post("/words/{word_id}/rollback/{bundle_id}")
 def rollback_bundle(
     word_id: int,
     bundle_id: int,
+    data: BundleActivation,
+    request: Request,
     db: Session = Depends(models.get_db),
     admin: models.User = Depends(get_admin_user),
 ):
-    return activate_bundle(
+    return _change_active_bundle(
         word_id=word_id,
         bundle_id=bundle_id,
+        expected_active_bundle_id=data.expected_active_bundle_id,
+        action="memory_bundle.rollback",
+        request=request,
         db=db,
         admin=admin,
     )

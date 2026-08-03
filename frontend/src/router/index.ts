@@ -9,6 +9,7 @@ import Study from '../views/Study.vue'
 import Review from '../views/Review.vue'
 import Backup from '../views/Backup.vue'
 import TestLab from '../views/TestLab.vue'
+import { useAuth } from '../composables/useAuth'
 
 const routes = [
   {
@@ -81,25 +82,17 @@ const router = createRouter({
 })
 
 // 全局路由守卫
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to) => {
   const token = localStorage.getItem('token')
-  const role = localStorage.getItem('role')
+  const { ensureAuth, isAdmin } = useAuth()
 
   if (to.meta.public) {
-    if (token) {
-      next('/')
-    } else {
-      next()
-    }
-  } else {
-    if (!token) {
-      next('/login')
-    } else if (to.meta.adminOnly && role !== 'admin') {
-      next('/dashboard')
-    } else {
-      next()
-    }
+    if (token && await ensureAuth()) return '/'
+    return true
   }
+  if (!token || !await ensureAuth()) return '/login'
+  if (to.meta.adminOnly && !isAdmin.value) return '/dashboard'
+  return true
 })
 
 export default router

@@ -301,8 +301,17 @@ def test_admin_can_edit_preview_and_activate_a_complete_version(api):
     activated = api["client"].post(
         f"/api/ai/evolution/words/{word_id}/activate/{draft_id}",
         headers=api["headers"],
+        json={"expected_active_bundle_id": versions["active_bundle_id"]},
     )
     assert activated.status_code == 200
+    stale_rollback = api["client"].post(
+        f"/api/ai/evolution/words/{word_id}/rollback/{source_id}",
+        headers=api["headers"],
+        json={"expected_active_bundle_id": source_id},
+    )
+    assert stale_rollback.status_code == 409
+    assert stale_rollback.json()["code"] == "stale_revision"
+    assert stale_rollback.json()["current"]["active_bundle_id"] == draft_id
     session = api["session"]()
     assert session.query(models.WordMemoryLink).filter_by(word_id=word_id).one().active_bundle_id == draft_id
     assert session.get(models.MemoryBundle, source_id).status == "archived"
@@ -367,6 +376,7 @@ def test_admin_cannot_activate_same_spelling_for_a_different_meaning(api):
     response = api["client"].post(
         f"/api/ai/evolution/words/{word_id}/activate/{bundle_id}",
         headers=api["headers"],
+        json={"expected_active_bundle_id": None},
     )
 
     assert response.status_code == 409

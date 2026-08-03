@@ -50,7 +50,7 @@ import { bankAPI } from '../api'
 import { useAuth } from '../composables/useAuth'
 import { Plus, Delete } from '@element-plus/icons-vue'
 
-interface Bank { id: number; name: string; word_count: number; created_at: string; deleting?: boolean }
+interface Bank { id: number; name: string; word_count: number; revision: number; created_at: string; deleting?: boolean }
 
 const { isAdmin } = useAuth()
 const banks = ref<Bank[]>([])
@@ -87,17 +87,26 @@ const handleDelete = async (row: Bank) => {
   try {
     await ElMessageBox.confirm(`确定删除词库"${row.name}"？此操作不可恢复。`, '确认删除', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' })
     row.deleting = true
-    await bankAPI.delete(row.id)
+    await bankAPI.delete(row.id, row.revision)
     ElMessage.success('已删除')
     await loadBanks()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e.response?.data?.detail || '删除失败')
+    if (e !== 'cancel') {
+      if (e.response?.data?.code === 'stale_revision') {
+        ElMessage.warning('词库状态已被另一位管理员更新，已重新加载')
+        await loadBanks()
+      } else {
+        ElMessage.error(e.response?.data?.detail || '删除失败')
+      }
+    }
   } finally { row.deleting = false }
 }
 
 const formatDate = (d: string) => {
-  if (!d) return ''; const dt = new Date(d)
-  return `${dt.getMonth() + 1}/${dt.getDate()}`
+  if (!d) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric',
+  }).format(new Date(d))
 }
 </script>
 

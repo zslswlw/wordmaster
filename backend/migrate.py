@@ -49,6 +49,8 @@ NEW_TABLES = {
             error_analysis_enabled BOOLEAN DEFAULT 1,
             story_enabled BOOLEAN DEFAULT 0,
             ai_worker_paused BOOLEAN DEFAULT 0,
+            ai_worker_pause_reason TEXT,
+            ai_worker_paused_at DATETIME,
             quota_reserve_percent INTEGER DEFAULT 30,
             feedback_reserve_percent INTEGER DEFAULT 20,
             priority_bank_id INTEGER REFERENCES word_banks(id)
@@ -107,6 +109,7 @@ NEW_TABLES = {
             word_id INTEGER NOT NULL UNIQUE REFERENCES words(id),
             active_bundle_id INTEGER REFERENCES memory_bundles(id),
             status VARCHAR NOT NULL DEFAULT 'pending',
+            revision INTEGER NOT NULL DEFAULT 1,
             updated_at DATETIME NOT NULL
         )
     """,
@@ -168,6 +171,31 @@ NEW_TABLES = {
             reset_at DATETIME,
             raw_payload TEXT,
             checked_at DATETIME NOT NULL
+        )
+    """,
+    "system_state": """
+        CREATE TABLE IF NOT EXISTS system_state (
+            id INTEGER PRIMARY KEY,
+            maintenance_mode BOOLEAN NOT NULL DEFAULT 0,
+            maintenance_reason VARCHAR,
+            maintenance_started_by INTEGER REFERENCES users(id),
+            maintenance_started_at DATETIME
+        )
+    """,
+    "admin_audit_logs": """
+        CREATE TABLE IF NOT EXISTS admin_audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_user_id INTEGER REFERENCES users(id),
+            actor_username VARCHAR NOT NULL,
+            action VARCHAR NOT NULL,
+            target_type VARCHAR NOT NULL,
+            target_id VARCHAR,
+            before_json TEXT,
+            after_json TEXT,
+            request_id VARCHAR(36) NOT NULL,
+            ip_address VARCHAR,
+            user_agent TEXT,
+            created_at DATETIME NOT NULL
         )
     """,
 }
@@ -356,11 +384,41 @@ def migrate(db_path=None):
         else:
             print(f"  - 已存在: {table_name}")
 
+    for table_name in ("word_banks", "api_configs", "feature_flags", "word_memory_links"):
+        if table_name in existing_tables or table_name in NEW_TABLES:
+            _add_column(cursor, table_name, "revision", "INTEGER NOT NULL DEFAULT 1")
+            cursor.execute(
+                f"UPDATE {table_name} SET revision = 1 WHERE revision IS NULL OR revision < 1"
+            )
+
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_admin_audit_created ON admin_audit_logs(created_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_admin_audit_actor_created "
+        "ON admin_audit_logs(actor_user_id, created_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_admin_audit_request_id ON admin_audit_logs(request_id)"
+    )
+
     _add_column(
         cursor,
         "feature_flags",
         "ai_worker_paused",
         "BOOLEAN DEFAULT 0",
+    )
+    _add_column(
+        cursor,
+        "feature_flags",
+        "ai_worker_pause_reason",
+        "TEXT",
+    )
+    _add_column(
+        cursor,
+        "feature_flags",
+        "ai_worker_paused_at",
+        "DATETIME",
     )
     _add_column(
         cursor,
@@ -387,6 +445,15 @@ def migrate(db_path=None):
         cursor.execute("INSERT INTO feature_flags (id, example_enabled, image_enabled, mnemonic_enabled, error_analysis_enabled, story_enabled) VALUES (1, 1, 1, 1, 1, 0)")
         print("  ✓ 插入默认 feature_flags 行")
 
+    cursor.execute(
+        """
+        UPDATE feature_flags
+        SET ai_worker_pause_reason = '旧版本自动暂停，恢复前请查看最近失败原因'
+        WHERE ai_worker_paused = 1
+          AND (ai_worker_pause_reason IS NULL OR trim(ai_worker_pause_reason) = '')
+        """
+    )
+
     # 词库迁移: user_id 允许 NULL (共享词库)
     if words_table_exists:
         cursor.execute("PRAGMA table_info(word_banks)")
@@ -394,8 +461,8 @@ def migrate(db_path=None):
         if "user_id" in bank_cols and bank_cols["user_id"][3] == 1:  # notnull=1
             conn.commit()  # 提交之前的操作
             # SQLite 不支持 ALTER COLUMN，通过重建表实现
-            conn.execute("CREATE TABLE word_banks_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR NOT NULL, user_id INTEGER NULL REFERENCES users(id), word_count INTEGER DEFAULT 0, created_at DATETIME)")
-            conn.execute("INSERT INTO word_banks_new SELECT id, name, user_id, word_count, created_at FROM word_banks")
+            conn.execute("CREATE TABLE word_banks_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR NOT NULL, user_id INTEGER NULL REFERENCES users(id), word_count INTEGER DEFAULT 0, revision INTEGER NOT NULL DEFAULT 1, created_at DATETIME)")
+            conn.execute("INSERT INTO word_banks_new SELECT id, name, user_id, word_count, revision, created_at FROM word_banks")
             conn.execute("DROP TABLE word_banks")
             conn.execute("ALTER TABLE word_banks_new RENAME TO word_banks")
             conn.commit()

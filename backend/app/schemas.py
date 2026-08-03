@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional, List, Literal
-from pydantic import Field
+from pydantic import Field, field_serializer
 from datetime import datetime, date
 
 
@@ -18,6 +18,11 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime):
+        from .admin_consistency import utc_iso
+        return utc_iso(value)
+
 
 class Token(BaseModel):
     access_token: str
@@ -32,10 +37,16 @@ class WordBankResponse(BaseModel):
     id: int
     name: str
     word_count: int
+    revision: int = 1
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime):
+        from .admin_consistency import utc_iso
+        return utc_iso(value)
 
 
 class WordResponse(BaseModel):

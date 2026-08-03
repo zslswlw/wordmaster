@@ -281,6 +281,8 @@ def seed_word_evolution(
         link = models.WordMemoryLink(word_id=word.id, status="pending")
         db.add(link)
     if reusable:
+        if link.id is not None:
+            link.revision = (link.revision or 1) + 1
         link.active_bundle_id = reusable.id
         ready_types = {
             row[0]
@@ -333,13 +335,17 @@ def seed_bank_evolution(
     bank_id: int,
     *,
     priority: int = 100,
+    commit: bool = True,
 ) -> dict:
     words = db.query(models.Word).filter(models.Word.bank_id == bank_id).all()
     result = {"total": len(words), "queued": 0, "reused": 0}
     for word in words:
         state = seed_word_evolution(db, word, priority=priority)
         result[state] += 1
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return result
 
 

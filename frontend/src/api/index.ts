@@ -59,7 +59,7 @@ export const bankAPI = {
       }
     })
   },
-  delete: (id: number) => api.delete(`/banks/${id}`)
+  delete: (id: number, expectedRevision: number) => api.delete(`/banks/${id}`, { params: { expected_revision: expectedRevision } })
 }
 
 export const groupAPI = {
@@ -132,7 +132,7 @@ export const settingsAPI = {
   getConfigs: () => api.get('/settings/ai-configs'),
   saveConfig: (data: any) => api.post('/settings/ai-configs', data),
   updateConfig: (id: number, data: any) => api.put(`/settings/ai-configs/${id}`, data),
-  deleteConfig: (id: number) => api.delete(`/settings/ai-configs/${id}`),
+  deleteConfig: (id: number, expectedRevision: number) => api.delete(`/settings/ai-configs/${id}`, { params: { expected_revision: expectedRevision } }),
   testConnection: (data: any) => api.post('/settings/ai-configs/test', data),
   getFeatureFlags: () => api.get('/settings/feature-flags'),
   updateFeatureFlags: (data: any) => api.put('/settings/feature-flags', data),
@@ -163,9 +163,18 @@ export const aiAPI = {
   quota: () => api.get('/ai/evolution/quota'),
   jobs: (status?: string) => api.get('/ai/evolution/jobs', { params: { status } }),
   worker: () => api.get('/ai/evolution/worker'),
-  updateWorker: (data: any) => api.put('/ai/evolution/worker', data),
+  updateWorker: (data: any) => api.patch('/ai/evolution/worker', data),
+  retryFailedJobs: () => api.post('/ai/evolution/jobs/retry-failed'),
   regenerateWord: (wordId: number) => api.post(`/ai/evolution/words/${wordId}/regenerate`),
   editBundle: (bundleId: number, data: any) => api.put(`/ai/evolution/bundles/${bundleId}`, data),
-  activateBundle: (wordId: number, bundleId: number) => api.post(`/ai/evolution/words/${wordId}/activate/${bundleId}`),
-  rollbackBundle: (wordId: number, bundleId: number) => api.post(`/ai/evolution/words/${wordId}/rollback/${bundleId}`),
+  activateBundle: (wordId: number, bundleId: number, expectedActiveBundleId: number | null) =>
+    api.post(`/ai/evolution/words/${wordId}/activate/${bundleId}`, { expected_active_bundle_id: expectedActiveBundleId }),
+  rollbackBundle: (wordId: number, bundleId: number, expectedActiveBundleId: number | null) =>
+    api.post(`/ai/evolution/words/${wordId}/rollback/${bundleId}`, { expected_active_bundle_id: expectedActiveBundleId }),
+}
+
+export const adminAPI = {
+  users: () => api.get('/admin/users'),
+  updateRole: (userId: number, role: 'admin' | 'user') => api.patch(`/admin/users/${userId}/role`, { role }),
+  auditLogs: (params?: { limit?: number; before_id?: number; action?: string }) => api.get('/admin/audit-logs', { params }),
 }
