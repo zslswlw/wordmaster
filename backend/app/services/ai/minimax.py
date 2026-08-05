@@ -1,9 +1,11 @@
 """MiniMax China provider: text, Image-01, Speech 2.8 and plan quota."""
 import asyncio
 import base64
+import binascii
 import threading
 import weakref
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -129,6 +131,39 @@ def _raise_for_body_error(data: Any, operation: str) -> None:
     )
 
 
+def _first_string(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, list):
+        return next(
+            (item.strip() for item in value if isinstance(item, str) and item.strip()),
+            None,
+        )
+    return None
+
+
+def _metadata_count(metadata: dict, name: str) -> int:
+    try:
+        return int(metadata.get(name) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _validated_image_bytes(content: bytes) -> bytes:
+    signatures = (b"\x89PNG", b"\xff\xd8\xff", b"RIFF", b"GIF8")
+    if len(content) < 100 or not content.startswith(signatures):
+        raise ProviderError(
+            "MiniMax image returned invalid image bytes",
+            code="invalid_image_bytes",
+        )
+    if len(content) > 25 * 1024 * 1024:
+        raise ProviderError(
+            "MiniMax image exceeded the 25 MB safety limit",
+            code="image_too_large",
+        )
+    return content
+
+
 class MiniMaxProvider(BaseProvider):
     """MiniMax API
 
@@ -211,7 +246,7 @@ class MiniMaxProvider(BaseProvider):
         return data["choices"][0]["message"]["content"]
 
     async def generate_image(self, prompt: str, **kwargs) -> bytes:
-        """MiniMax Image-01 图像生成, 返回 PNG 二进制"""
+        """Generate one image and normalize base64 or temporary-URL responses."""
         model = kwargs.pop("model", self.config.image_model or "image-01")
         resp = await self._request(
             "POST",
@@ -231,11 +266,82 @@ class MiniMaxProvider(BaseProvider):
         _raise_for_http_error(resp, "image")
         data = resp.json()
         _raise_for_body_error(data, "image")
-        b64 = data["data"]["image_base64"][0]
-        content = base64.b64decode(b64)
-        if len(content) < 100 or content[:1] not in (b"\x89", b"\xff", b"R"):
-            raise ProviderError("MiniMax image returned invalid image bytes")
-        return content
+        image_data = data.get("data") if isinstance(data, dict) else None
+        image_data = image_data if isinstance(image_data, dict) else {}
+
+        encoded = _first_string(image_data.get("image_base64"))
+        if encoded:
+            if encoded.startswith("data:") and "," in encoded:
+                encoded = encoded.split(",", 1)[1]
+            try:
+                content = base64.b64decode("".join(encoded.split()), validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ProviderError(
+                    "MiniMax image returned invalid base64",
+                    code="invalid_image_base64",
+                ) from exc
+            return _validated_image_bytes(content)
+
+        image_url = (
+            _first_string(image_data.get("image_urls"))
+            or _first_string(image_data.get("image_url"))
+        )
+        if image_url:
+            return await self._download_image(image_url)
+
+        metadata = data.get("metadata") if isinstance(data, dict) else None
+        metadata = metadata if isinstance(metadata, dict) else {}
+        failed_count = _metadata_count(metadata, "failed_count")
+        success_count = _metadata_count(metadata, "success_count")
+        if failed_count > 0 and success_count == 0:
+            raise ContentRejectedError(
+                "MiniMax image content safety review returned no image",
+                code="image_content_rejected",
+            )
+
+        fields = sorted(str(key) for key in image_data)
+        raise ProviderError(
+            "MiniMax image response contained no image asset "
+            f"(data fields: {fields or ['none']}, success_count: {success_count}, "
+            f"failed_count: {failed_count})",
+            code="invalid_image_response",
+        )
+
+    async def _download_image(self, image_url: str) -> bytes:
+        parsed = urlparse(image_url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ProviderError(
+                "MiniMax returned an invalid image URL",
+                code="invalid_image_url",
+            )
+
+        async with _request_lock():
+            async with httpx.AsyncClient(
+                timeout=60,
+                trust_env=False,
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(image_url, headers={"Accept": "image/*"})
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise RateLimitError(
+                f"MiniMax image download temporarily unavailable ({resp.status_code})",
+                retry_after=60.0,
+            )
+        if resp.status_code >= 400:
+            raise ProviderError(
+                f"MiniMax image URL HTTP {resp.status_code}",
+                code="image_url_unavailable",
+            )
+        content_type = resp.headers.get("content-type", "").lower()
+        if content_type and not (
+            content_type.startswith("image/")
+            or content_type.startswith("application/octet-stream")
+        ):
+            raise ProviderError(
+                f"MiniMax image URL returned {content_type}",
+                code="invalid_image_content_type",
+            )
+        return _validated_image_bytes(resp.content)
 
     async def text_to_speech(self, text: str, **kwargs) -> bytes:
         """MiniMax Speech 2.8 T2A v2, whose audio field defaults to hex."""

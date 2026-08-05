@@ -91,6 +91,105 @@ def test_minimax_chat_defaults_to_m3(monkeypatch):
     assert "max_tokens" not in captured["body"]
 
 
+def test_minimax_image_downloads_temporary_url_without_leaking_api_key(monkeypatch):
+    from app.services.ai import minimax as minimax_module
+
+    image = b"\x89PNG\r\n\x1a\n" + (b"image" * 40)
+    cdn_authorization = None
+
+    def handler(request: httpx.Request):
+        nonlocal cdn_authorization
+        if str(request.url).endswith("/v1/image_generation"):
+            return httpx.Response(200, json={
+                "data": {"image_urls": ["https://cdn.hailuoai.com/generated/test.png"]},
+                "metadata": {"failed_count": "0", "success_count": "1"},
+                "base_resp": {"status_code": 0},
+            })
+        cdn_authorization = request.headers.get("authorization")
+        return httpx.Response(
+            200,
+            content=image,
+            headers={"content-type": "image/png"},
+        )
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        minimax_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_client(transport=transport),
+    )
+    provider = MiniMaxProvider(ProviderConfig(
+        api_key="secret-test-key",
+        api_base="https://api.minimaxi.com",
+        image_model="image-01",
+    ))
+
+    result = asyncio.run(provider.generate_image("one red boat, no text"))
+
+    assert result == image
+    assert cdn_authorization is None
+
+
+def test_minimax_image_reports_content_review_without_key_error(monkeypatch):
+    from app.services.ai import minimax as minimax_module
+
+    def handler(_request: httpx.Request):
+        return httpx.Response(200, json={
+            "data": {},
+            "metadata": {"failed_count": "1", "success_count": "0"},
+            "base_resp": {"status_code": 0, "status_msg": "success"},
+        })
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        minimax_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_client(transport=transport),
+    )
+    provider = MiniMaxProvider(ProviderConfig(
+        api_key="test",
+        api_base="https://api.minimaxi.com",
+        image_model="image-01",
+    ))
+
+    with pytest.raises(ContentRejectedError) as exc_info:
+        asyncio.run(provider.generate_image("rejected prompt"))
+
+    assert exc_info.value.code == "image_content_rejected"
+
+
+def test_minimax_image_reports_unknown_success_shape_as_provider_error(monkeypatch):
+    from app.services.ai import minimax as minimax_module
+
+    def handler(_request: httpx.Request):
+        return httpx.Response(200, json={
+            "data": {"unexpected": []},
+            "metadata": {"failed_count": "0", "success_count": "1"},
+            "base_resp": {"status_code": 0},
+        })
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        minimax_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_client(transport=transport),
+    )
+    provider = MiniMaxProvider(ProviderConfig(
+        api_key="test",
+        api_base="https://api.minimaxi.com",
+        image_model="image-01",
+    ))
+
+    with pytest.raises(ProviderError) as exc_info:
+        asyncio.run(provider.generate_image("one red boat"))
+
+    assert exc_info.value.code == "invalid_image_response"
+    assert "unexpected" in str(exc_info.value)
+
+
 def test_minimax_error_codes_have_distinct_retry_policy():
     with pytest.raises(RateLimitError):
         _raise_for_body_error(
