@@ -137,9 +137,16 @@ def delete_bank(
         db.query(models.WordMemoryLink).filter(
             models.WordMemoryLink.word_id.in_(word_ids),
         ).delete(synchronize_session=False)
+    job_ids = db.query(models.AiJob.id).filter(models.AiJob.bank_id == bank_id)
+    db.query(models.AiJobAttempt).filter(
+        models.AiJobAttempt.job_id.in_(job_ids),
+    ).delete(synchronize_session=False)
     db.query(models.AiJob).filter(models.AiJob.bank_id == bank_id).delete(
         synchronize_session=False,
     )
+    db.query(models.AiLaneState).filter(
+        models.AiLaneState.cursor_bank_id == bank_id,
+    ).update({"cursor_bank_id": None}, synchronize_session=False)
     flags = db.query(models.FeatureFlags).filter(
         models.FeatureFlags.priority_bank_id == bank_id,
     ).first()

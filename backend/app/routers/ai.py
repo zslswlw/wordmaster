@@ -2,12 +2,12 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth import get_admin_user, get_current_user
 from ..models import AiJob, User, Word, get_db
-from ..services.ai import AiService
+from ..services.ai import AiService, InteractiveAiGenerationError
 from ..services.learning_content import (
     coverage_for_bank,
     seed_bank_evolution,
@@ -19,18 +19,18 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 
 class EnrichError(BaseModel):
-    word: str
-    correct: str
-    user: str
-    meaning: Optional[str] = None
+    word: str = Field(min_length=1, max_length=128)
+    correct: str = Field(min_length=1, max_length=128)
+    user: str = Field(max_length=128)
+    meaning: Optional[str] = Field(default=None, max_length=500)
 
 
 class AnalyzeErrorsRequest(BaseModel):
-    errors: list[EnrichError]
+    errors: list[EnrichError] = Field(max_length=50)
 
 
 class StoryRequest(BaseModel):
-    words: list[str]
+    words: list[str] = Field(max_length=20)
 
 
 class DistinguishRequest(BaseModel):
@@ -46,6 +46,14 @@ def _queue_bank(db: Session, bank_id: int, message: str, priority: int = 30):
         raise HTTPException(404, "词库不存在或无单词")
     result = seed_bank_evolution(db, bank_id, priority=priority)
     return {**result, "message": message}
+
+
+def _raise_interactive_ai_error(exc: InteractiveAiGenerationError) -> None:
+    status_code = 502 if exc.code == "invalid_ai_output" else 503
+    raise HTTPException(
+        status_code=status_code,
+        detail={"code": exc.code, "message": exc.public_message},
+    ) from exc
 
 
 @router.post("/generate-bank-images/{bank_id}")
@@ -204,7 +212,10 @@ async def analyze_errors(
         }
         for item in req.errors
     ]
-    return await AiService(db).analyze_errors(errors)
+    try:
+        return await AiService(db).analyze_errors(errors)
+    except InteractiveAiGenerationError as exc:
+        _raise_interactive_ai_error(exc)
 
 
 @router.post("/story")
@@ -213,10 +224,19 @@ async def generate_story(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not req.words:
-        raise HTTPException(400, "请提供单词列表")
-    story = await AiService(db).generate_story(req.words)
-    return {"story": story, "word_count": len(req.words)}
+    words = list(dict.fromkeys(word.strip() for word in req.words if word.strip()))
+    if len(words) < 3:
+        raise HTTPException(400, "请至少提供 3 个不同的错词")
+    service = AiService(db)
+    try:
+        story = await service.generate_story(words)
+    except InteractiveAiGenerationError as exc:
+        _raise_interactive_ai_error(exc)
+    return {
+        "story": story,
+        "word_count": len(words),
+        "status": "ready" if story else "disabled",
+    }
 
 
 @router.post("/distinguish")

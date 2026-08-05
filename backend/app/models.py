@@ -398,7 +398,51 @@ class AiJob(Base):
     idempotency_key = Column(String, nullable=False, unique=True, index=True)
     last_error_code = Column(String, nullable=True)
     last_error_message = Column(Text, nullable=True)
+    batch_id = Column(String(36), nullable=True, index=True)
+    started_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class AiJobAttempt(Base):
+    """One provider call or per-item result for persistent throughput metrics."""
+
+    __tablename__ = "ai_job_attempts"
+    __table_args__ = (
+        Index("ix_ai_job_attempts_started", "started_at"),
+        Index("ix_ai_job_attempts_kind_started", "kind", "started_at"),
+        Index("ix_ai_job_attempts_provider_started", "provider", "started_at"),
+        Index("ix_ai_job_attempts_job_started", "job_id", "started_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(String(36), ForeignKey("ai_jobs.id"), nullable=False)
+    batch_id = Column(String(36), nullable=True, index=True)
+    kind = Column(String, nullable=False)
+    provider = Column(String, nullable=True)
+    model = Column(String, nullable=True)
+    outcome = Column(String, nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=False)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    error_code = Column(String, nullable=True)
+    retry_at = Column(DateTime, nullable=True)
+
+
+class AiLaneState(Base):
+    """Restart-safe scheduler cursor, cooldown and current-call state."""
+
+    __tablename__ = "ai_lane_states"
+
+    name = Column(String, primary_key=True)
+    cursor_bank_id = Column(Integer, ForeignKey("word_banks.id"), nullable=True)
+    blocked_until = Column(DateTime, nullable=True)
+    block_reason = Column(String, nullable=True)
+    current_batch_id = Column(String(36), nullable=True)
+    current_job_ids = Column(Text, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
 

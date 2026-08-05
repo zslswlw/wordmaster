@@ -38,6 +38,43 @@ MEMORY_BUNDLE = """你是为中国学习者设计英语词汇记忆材料的编�
   "approved": true
 }}"""
 
+MEMORY_BUNDLE_BATCH = """你是为中国学习者设计英语词汇记忆材料的编辑。请一次处理下面多个单词，每项必须忠于给定词义，建立自然、具体、可复述的图文联系。
+
+输入项目：
+{items_json}
+
+规则：
+1. 每个 job_id 必须原样返回且只能返回一次。
+2. 具体词直接表现词义和关键动作；抽象词只使用一个容易解释的视觉隐喻。
+3. 只有存在自然联系时才使用谐音；不确定的词根词源不生成。
+4. memory_anchor 使用中文且不超过 45 个汉字，明确画面和词义的联系。
+5. image_prompt 使用英文，只包含一个主体、一个关键动作和一个鲜明细节，不含文字、字母或 Logo。
+6. narration_text 是自然中文的“词性，1 至 2 个主要义项”，不超过 32 个汉字。
+7. 四项质量分任一不能诚实达到 4 分时，approved 必须为 false。
+
+严格只返回以下 JSON，不要 Markdown、解释或额外字段：
+{{
+  "items": [
+    {{
+      "job_id": "输入中的 job_id",
+      "normalized_pos": "自然中文词性，无法确定时为 null",
+      "primary_meaning": "最多两个主要中文义项",
+      "strategy": "direct 或 metaphor 或 natural_homophone",
+      "memory_anchor": "中文记忆点",
+      "scene_summary": "一句中文画面摘要",
+      "image_prompt": "English image prompt",
+      "narration_text": "自然中文播报",
+      "scores": {{
+        "meaning_consistency": 1,
+        "association_naturalness": 1,
+        "visual_clarity": 1,
+        "distinctiveness": 1
+      }},
+      "approved": true
+    }}
+  ]
+}}"""
+
 ENRICH_WORD = """You are a vocabulary tutor enriching English words for Chinese learners (native Chinese speakers learning English).
 
 Word: "{word}"
@@ -59,32 +96,22 @@ Generate the following. Return ONLY valid JSON, no other text:
 
 CRITICAL: Return ONLY the JSON. No markdown code blocks, no explanations."""
 
-ANALYZE_ERRORS = """Analyze these English spelling errors from a native Chinese speaker learning English.
+ANALYZE_ERRORS = """请分析中国学习者本轮出现的英语拼写错误。
 
-Errors:
+输入错题：
 {errors_json}
 
-For each error, the format is: {{"word": "correct_spelling", "user": "what_user_typed", "meaning": "Chinese meaning"}}
+每项中 correct 是正确拼写，user 是用户输入，meaning 是中文词义。
 
-Task:
-1. Identify common ERROR PATTERNS across multiple words:
-   - double_letter_missing: user missed a double consonant (e.g. "necessary" → "necesary")
-   - vowel_confusion: wrong vowel (e.g. "separate" → "seperate", ie/ei confusion)
-   - silent_letter: missed a silent letter (e.g. "government" → "goverment")
-   - L1_interference: Chinese pronunciation influenced the spelling
-   - suffix_error: wrong word ending (-tion/-sion, -able/-ible, -ence/-ance)
-   - phonetic_approximation: user spelled phonetically but incorrectly
-   - single_consonant: doubled a letter that should be single
+要求：
+1. 只依据输入判断，不虚构用户没有写过的错误。
+2. 优先找跨多个词重复出现的模式；单个词没有可靠共性时可使用 specific_word。
+3. 可使用 double_letter_missing、vowel_confusion、silent_letter、L1_interference、suffix_error、phonetic_approximation、single_consonant、letter_order、specific_word 等类型。
+4. patterns.words 只能引用输入中的 correct 值，保持原拼写；practice 可以补充同规则练习词。
+5. explanation 必须用中文说明“错在哪里”和“下次如何检查”，不要编造不确定的词源规则。
+6. summary 用 1 至 3 句中文给出本轮最值得练习的重点，简洁且可执行。
 
-2. Group the errors by pattern. Each pattern should list the words that exhibit it.
-
-3. For each pattern, provide:
-   - A clear explanation of the rule (in Chinese)
-   - Suggested practice words that reinforce the same rule
-
-4. Give a brief, encouraging summary.
-
-Respond in Chinese. Keep it concise and actionable. Format as JSON:
+严格只返回以下 JSON，不要 Markdown、推理过程或额外字段：
 
 {{
   "patterns": [
@@ -97,11 +124,9 @@ Respond in Chinese. Keep it concise and actionable. Format as JSON:
     }}
   ],
   "summary": "本轮共发现X种拼写模式。重点关注..."
-}}
+}}"""
 
-CRITICAL: Return ONLY the JSON. No markdown code blocks, no explanations."""
-
-GENERATE_STORY = """Weave these English words into a coherent micro-story.
+GENERATE_STORY = """Weave these target words into one coherent English micro-story for a Chinese learner.
 
 Words: {words}
 
@@ -112,6 +137,7 @@ Requirements:
 - Readable in 15-20 seconds
 - Language level: intermediate English (B1-B2)
 - The story should make sense as a narrative, not just a list of sentences
+- Keep every target word in its exact spelling; do not replace it with another word form
 
 Return the story only. No markdown, no title, no explanations."""
 

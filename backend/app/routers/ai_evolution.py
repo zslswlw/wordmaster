@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from datetime import timedelta
 from typing import Literal, Optional
@@ -13,7 +14,11 @@ from .. import models
 from ..auth import get_admin_user, get_current_user
 from ..clock import utc_now
 from ..admin_consistency import RevisionConflict, audit_admin_action, utc_iso
-from ..services.ai.worker import AiJobProcessor, silent_worker_status
+from ..services.ai.worker import (
+    AiJobProcessor,
+    _extract_quota_resource_states,
+    silent_worker_status,
+)
 from ..services.learning_content import (
     MeaningNormalizer,
     build_lexeme_key,
@@ -60,6 +65,16 @@ class WorkerUpdate(BaseModel):
     priority_bank_id: Optional[int] = None
 
 
+class RetryFailedRequest(BaseModel):
+    job_ids: Optional[list[str]] = None
+    error_codes: Optional[list[str]] = None
+
+
+class ReconcileJobsRequest(BaseModel):
+    apply: bool = False
+    token: Optional[str] = None
+
+
 class BundleEdit(BaseModel):
     memory_anchor: Optional[str] = Field(default=None, min_length=1, max_length=45)
     image_prompt: Optional[str] = Field(default=None, min_length=20, max_length=800)
@@ -70,6 +85,16 @@ class BundleEdit(BaseModel):
     def image_prompt_must_be_english(cls, value):
         if value and re.search(r"[\u3400-\u9fff]", value):
             raise ValueError("图片提示词应使用英文")
+        return value
+
+    @field_validator("narration_text")
+    @classmethod
+    def narration_must_be_natural_chinese(cls, value):
+        if value and any(
+            token in value.lower()
+            for token in ("vt.", "vi.", "adj.", "adv.", "prep.")
+        ):
+            raise ValueError("播报脚本不能包含词性缩写")
         return value
 
 
@@ -85,16 +110,6 @@ def _api_value(value):
     if isinstance(value, list):
         return [_api_value(item) for item in value]
     return value
-
-    @field_validator("narration_text")
-    @classmethod
-    def narration_must_be_natural_chinese(cls, value):
-        if value and any(
-            token in value.lower()
-            for token in ("vt.", "vi.", "adj.", "adv.", "prep.")
-        ):
-            raise ValueError("播报脚本不能包含词性缩写")
-        return value
 
 
 def _flags(db: Session) -> models.FeatureFlags:
@@ -136,18 +151,41 @@ def _job_summary(
     current_jobs = query.filter(
         models.AiJob.status == "running",
     ).order_by(models.AiJob.updated_at.desc()).all()
+    now = utc_now()
     next_job = query.filter(
         models.AiJob.status == "pending",
+        models.AiJob.available_at <= now,
     ).order_by(
         models.AiJob.priority.asc(),
-        models.AiJob.available_at.asc(),
+        models.AiJob.created_at.asc(),
     ).first()
+    ready_now = query.filter(
+        models.AiJob.status == "pending",
+        models.AiJob.available_at <= now,
+    ).count()
+    ready_by_kind = {
+        kind: int(count)
+        for kind, count in query.filter(
+            models.AiJob.status == "pending",
+            models.AiJob.available_at <= now,
+        ).with_entities(
+            models.AiJob.kind,
+            func.count(models.AiJob.id),
+        ).group_by(models.AiJob.kind).all()
+    }
+    delayed = query.filter(
+        models.AiJob.status == "pending",
+        models.AiJob.available_at > now,
+    ).count()
     latest_success = query.filter(
         models.AiJob.status == "completed",
     ).order_by(models.AiJob.updated_at.desc()).first()
     latest_failure = query.filter(
         models.AiJob.status == "failed",
     ).order_by(models.AiJob.updated_at.desc()).first()
+    failed_samples = query.filter(
+        models.AiJob.status == "failed",
+    ).order_by(models.AiJob.updated_at.desc()).limit(5).all() if detailed else []
     if current_jobs:
         state = "running"
     elif counts.get("pending", 0):
@@ -167,6 +205,8 @@ def _job_summary(
             "target_id": job.target_id,
             "bank_id": job.bank_id,
             "attempts": job.attempts,
+            "batch_id": job.batch_id,
+            "started_at": utc_iso(job.started_at),
             "available_at": utc_iso(job.available_at),
             "updated_at": utc_iso(job.updated_at),
             "last_error_code": job.last_error_code,
@@ -177,12 +217,19 @@ def _job_summary(
         "state": state,
         "counts": counts,
         "active_jobs": counts.get("pending", 0) + counts.get("running", 0),
+        "real_calls": len({job.batch_id or job.id for job in current_jobs}),
+        "ready_now": ready_now,
+        "ready_by_kind": ready_by_kind,
+        "delayed": delayed,
+        "attention": counts.get("failed", 0),
+        "cancelled": counts.get("cancelled", 0),
         "current_job": serialize(current_jobs[0]) if current_jobs else None,
         "current_jobs": [serialize(job) for job in current_jobs],
         "next_job": serialize(next_job),
         "last_activity_at": utc_iso(latest_success.updated_at) if latest_success else None,
         "last_failure_at": utc_iso(latest_failure.updated_at) if latest_failure else None,
         "latest_failure": serialize(latest_failure),
+        "failed_samples": [serialize(job) for job in failed_samples],
     }
     if not detailed:
         return result
@@ -224,17 +271,210 @@ def _job_summary(
     return result
 
 
+def _attempt_rows(db: Session) -> list:
+    cutoff = utc_now() - timedelta(days=7)
+    return db.query(
+        models.AiJobAttempt.kind,
+        models.AiJobAttempt.outcome,
+        models.AiJobAttempt.batch_id,
+        models.AiJobAttempt.duration_ms,
+        models.AiJobAttempt.started_at,
+        models.AiJobAttempt.provider,
+        models.AiJobAttempt.model,
+        models.AiJobAttempt.error_code,
+        models.AiJob.bank_id,
+    ).join(models.AiJob, models.AiJob.id == models.AiJobAttempt.job_id).filter(
+        models.AiJobAttempt.started_at >= cutoff,
+    ).all()
+
+
+def _attempt_metrics(
+    db: Session,
+    bank_id: Optional[int] = None,
+    *,
+    rows: Optional[list] = None,
+) -> dict:
+    rows = rows if rows is not None else _attempt_rows(db)
+    if bank_id is not None:
+        rows = [row for row in rows if row.bank_id == bank_id]
+    cutoff = utc_now() - timedelta(days=7)
+    windows = {
+        "1h": utc_now() - timedelta(hours=1),
+        "24h": utc_now() - timedelta(hours=24),
+        "7d": cutoff,
+    }
+    result = {}
+    for label, start in windows.items():
+        selected = [row for row in rows if row.started_at >= start]
+        requests = {
+            (row.provider or "unknown", row.batch_id or f"item:{index}")
+            for index, row in enumerate(selected)
+        }
+        completed = [row for row in selected if row.outcome == "completed"]
+        result[label] = {
+            "requests": len(requests),
+            "completed_items": len(completed),
+            "retried_items": sum(
+                row.outcome in {"retry", "validation_retry"}
+                for row in selected
+            ),
+            "failed_items": sum(row.outcome == "failed" for row in selected),
+            "by_kind": {
+                kind: sum(
+                    row.outcome == "completed" and row.kind == kind
+                    for row in selected
+                )
+                for kind in ("bundle_text", "bundle_refresh", "feedback_bundle", "image", "audio")
+            },
+        }
+
+    by_kind = {}
+    for kind in ("bundle_text", "bundle_refresh", "feedback_bundle", "image", "audio"):
+        selected = [row for row in rows if row.kind == kind]
+        request_durations: dict[tuple, int] = {}
+        for index, row in enumerate(selected):
+            key = (row.provider or "unknown", row.batch_id or f"item:{index}")
+            request_durations[key] = max(
+                request_durations.get(key, 0),
+                row.duration_ms or 0,
+            )
+        durations = sorted(request_durations.values())
+        completed_count = sum(row.outcome == "completed" for row in selected)
+        terminal_count = sum(row.outcome in {"completed", "failed"} for row in selected)
+        retry_count = sum(
+            row.outcome in {"retry", "validation_retry"}
+            for row in selected
+        )
+        p95_index = max(0, math.ceil(len(durations) * 0.95) - 1) if durations else 0
+        by_kind[kind] = {
+            "attempted": terminal_count,
+            "requests": len(request_durations),
+            "completed": completed_count,
+            "success_rate": round(
+                completed_count * 100 / terminal_count,
+                1,
+            ) if terminal_count else None,
+            "average_duration_ms": round(sum(durations) / len(durations)) if durations else None,
+            "p95_duration_ms": durations[p95_index] if durations else None,
+            "retry_rate": round(
+                retry_count * 100 / (terminal_count + retry_count),
+                1,
+            ) if terminal_count + retry_count else None,
+        }
+    result["by_kind"] = by_kind
+    by_provider = {}
+    for provider in sorted({row.provider or "unknown" for row in rows}):
+        selected = [row for row in rows if (row.provider or "unknown") == provider]
+        request_groups: dict[str, list] = {}
+        for index, row in enumerate(selected):
+            request_groups.setdefault(row.batch_id or f"item:{index}", []).append(row)
+        durations = sorted(
+            max(item.duration_ms or 0 for item in group)
+            for group in request_groups.values()
+        )
+        p95_index = max(0, math.ceil(len(durations) * 0.95) - 1) if durations else 0
+        by_provider[provider] = {
+            "requests": len(request_groups),
+            "completed_items": sum(row.outcome == "completed" for row in selected),
+            "failed_items": sum(row.outcome == "failed" for row in selected),
+            "average_duration_ms": round(sum(durations) / len(durations)) if durations else None,
+            "p95_duration_ms": durations[p95_index] if durations else None,
+            "models": sorted({row.model for row in selected if row.model}),
+            "errors": {
+                code: sum((row.error_code or "unknown") == code for row in selected)
+                for code in sorted({row.error_code or "unknown" for row in selected if row.error_code})
+            },
+        }
+    result["by_provider"] = by_provider
+    return result
+
+
+def _lane_payload(db: Session) -> list[dict]:
+    now = utc_now()
+    rows = db.query(models.AiLaneState).filter(
+        models.AiLaneState.name.in_(("text", "image", "audio", "minimax_text")),
+    ).order_by(models.AiLaneState.name.asc()).all()
+    row_by_name = {row.name: row for row in rows}
+    result = []
+    for name in ("text", "image", "audio", "minimax_text"):
+        row = row_by_name.get(name)
+        if row is None:
+            result.append({
+                "name": name,
+                "state": "ready",
+                "cursor_bank_id": None,
+                "blocked_until": None,
+                "block_reason": None,
+                "current_batch_id": None,
+                "current_job_ids": [],
+                "heartbeat_at": None,
+                "last_success_at": None,
+                "last_error": None,
+            })
+            continue
+        blocked = bool(row.blocked_until and row.blocked_until > now)
+        if row.current_batch_id:
+            state = "running"
+        elif blocked:
+            reason = (row.block_reason or "").lower()
+            state = (
+                "waiting_quota"
+                if any(token in reason for token in ("额度", "2056", "quota"))
+                else "waiting_rate_limit"
+            )
+            if any(token in reason for token in (
+                "key", "配置", "1004", "1039", "2013", "http_401", "http_403", "http_404",
+            )):
+                state = "configuration_error"
+        else:
+            state = "ready"
+        result.append({
+            "name": row.name,
+            "state": state,
+            "cursor_bank_id": row.cursor_bank_id,
+            "blocked_until": utc_iso(row.blocked_until),
+            "block_reason": row.block_reason,
+            "current_batch_id": row.current_batch_id,
+            "current_job_ids": _json_or_none(row.current_job_ids) or [],
+            "heartbeat_at": utc_iso(row.heartbeat_at),
+            "last_success_at": utc_iso(row.last_success_at),
+            "last_error": row.last_error,
+        })
+    return result
+
+
 def _quota_payload(db: Session) -> dict:
     snapshot = db.query(models.AiQuotaSnapshot).filter(
         models.AiQuotaSnapshot.provider == "minimax",
     ).order_by(models.AiQuotaSnapshot.checked_at.desc()).first()
     if not snapshot:
-        return {"status": "unknown", "remaining_percent": None, "checked_at": None}
+        return {
+            "status": "unknown",
+            "remaining_percent": None,
+            "checked_at": None,
+            "resources": {
+                name: {"status": "unknown", "remaining_percent": None, "reset_at": None}
+                for name in ("text", "image", "audio")
+            },
+        }
+    resources = {
+        "text": {"status": "unknown", "remaining_percent": None, "reset_at": None},
+        "image": {"status": "unknown", "remaining_percent": None, "reset_at": None},
+        "audio": {"status": "unknown", "remaining_percent": None, "reset_at": None},
+    }
+    raw = _json_or_none(snapshot.raw_payload) or {}
+    for resource, (remaining, reset_at) in _extract_quota_resource_states(raw).items():
+        resources[resource] = {
+            "status": "available" if remaining is not None else "unknown",
+            "remaining_percent": remaining,
+            "reset_at": utc_iso(reset_at),
+        }
     return {
         "status": snapshot.status,
         "remaining_percent": snapshot.remaining_percent,
         "reset_at": utc_iso(snapshot.reset_at),
         "checked_at": utc_iso(snapshot.checked_at),
+        "resources": resources,
     }
 
 
@@ -250,13 +490,53 @@ def _worker_payload(db: Session) -> dict:
     )
     next_job = queue.get("next_job") or {}
     next_error = next_job.get("last_error_code")
+    lanes = _lane_payload(db)
+    blocked_lanes = [lane for lane in lanes if lane["state"] not in {"ready", "running"}]
+    capability_blocked = [
+        lane for lane in blocked_lanes if lane["name"] in {"text", "image", "audio"}
+    ]
+    blocked_names = {lane["name"] for lane in blocked_lanes}
+    blocked_kinds = set()
+    if "text" in blocked_names:
+        blocked_kinds.update(("bundle_text", "bundle_refresh", "feedback_bundle"))
+    if "image" in blocked_names:
+        blocked_kinds.add("image")
+    if "audio" in blocked_names:
+        blocked_kinds.add("audio")
+    queue["blocked_ready"] = sum(
+        queue["ready_by_kind"].get(kind, 0) for kind in blocked_kinds
+    )
+    queue["ready_now"] = max(0, queue["ready_now"] - queue["blocked_ready"])
+    queue["scheduled_delayed"] = queue["delayed"]
+    queue["delayed"] += queue["blocked_ready"]
+    last_success_attempt = db.query(
+        func.max(models.AiJobAttempt.finished_at),
+    ).filter(models.AiJobAttempt.outcome == "completed").scalar()
+    runtime_started = raw_runtime.get("started_at")
+    progress_baseline = max(
+        [value for value in (runtime_started, last_success_attempt) if value is not None],
+        default=None,
+    )
+    no_progress = bool(
+        queue["ready_now"]
+        and not queue.get("current_job")
+        and not capability_blocked
+        and progress_baseline
+        and utc_now() - progress_baseline > timedelta(minutes=15)
+    )
 
     if flags.ai_worker_paused:
         state = "paused"
     elif not runtime.get("alive") or heartbeat_stale:
         state = "stalled" if queue["active_jobs"] else "idle"
+    elif no_progress:
+        state = "no_progress"
     elif queue.get("current_job"):
-        state = "running"
+        state = "partial" if blocked_lanes else "running"
+    elif blocked_lanes and queue["ready_now"]:
+        state = "partial"
+    elif blocked_lanes:
+        state = blocked_lanes[0]["state"]
     elif queue["counts"].get("pending", 0):
         if next_error in {"quota_reserve", "2056"}:
             state = "waiting_quota"
@@ -280,6 +560,8 @@ def _worker_payload(db: Session) -> dict:
         "priority_bank_id": flags.priority_bank_id,
         "queue": queue,
         "runtime": runtime,
+        "lanes": lanes,
+        "no_progress_since": utc_iso(progress_baseline) if no_progress else None,
     }
 
 
@@ -549,6 +831,8 @@ def list_jobs(
                 "attempts": job.attempts,
                 "last_error_code": job.last_error_code,
                 "last_error_message": job.last_error_message,
+                "batch_id": job.batch_id,
+                "started_at": utc_iso(job.started_at),
                 "available_at": utc_iso(job.available_at),
                 "updated_at": utc_iso(job.updated_at),
             }
@@ -574,9 +858,17 @@ def evolution_dashboard(
         models.WordBank.created_at.asc(),
         models.WordBank.id.asc(),
     ).all()
+    attempt_rows = _attempt_rows(db)
     bank_rows = []
     for bank in banks:
         coverage = coverage_for_bank(db, bank.id)
+        recent = _attempt_metrics(db, bank.id, rows=attempt_rows)
+        complete_rate = recent["7d"]["by_kind"].get("audio", 0)
+        remaining_complete = max(0, coverage["total"] - coverage["complete_ready"])
+        eta_at = None
+        if complete_rate >= 3 and remaining_complete:
+            daily_rate = complete_rate / 7
+            eta_at = utc_iso(utc_now() + timedelta(days=math.ceil(remaining_complete / daily_rate)))
         bank_rows.append({
             "id": bank.id,
             "name": bank.name,
@@ -584,6 +876,8 @@ def evolution_dashboard(
             "revision": bank.revision,
             **coverage,
             "queue": _job_summary(db, bank.id, detailed=False),
+            "completed_24h": recent["24h"]["by_kind"],
+            "eta_at": eta_at,
         })
     feedback_count = db.query(func.count(models.MemoryFeedback.id)).filter(
         models.MemoryFeedback.status.in_(["pending", "generating", "manual_review"]),
@@ -596,6 +890,7 @@ def evolution_dashboard(
         "quota": _quota_payload(db),
         "banks": bank_rows,
         "feedback_pending": int(feedback_count),
+        "throughput": _attempt_metrics(db, rows=attempt_rows),
     }
 
 
@@ -672,9 +967,6 @@ def update_worker(
         db.expire_all()
         flags = _flags(db)
 
-    requeued_failed = 0
-    if requested_pause is False:
-        requeued_failed = AiJobProcessor(db).requeue_failed(commit=False)
     action = (
         "ai_worker.pause" if requested_pause is True
         else "ai_worker.resume" if requested_pause is False
@@ -688,31 +980,72 @@ def update_worker(
         target_type="ai_worker",
         target_id=flags.id,
         before=before,
-        after={**_worker_config_snapshot(flags), "requeued_failed": requeued_failed},
+        after=_worker_config_snapshot(flags),
     )
     db.commit()
-    payload = _worker_payload(db)
-    payload["requeued_failed"] = requeued_failed
-    return payload
+    return _worker_payload(db)
 
 
 @router.post("/jobs/retry-failed")
 def retry_failed_jobs(
     request: Request,
+    data: Optional[RetryFailedRequest] = None,
     db: Session = Depends(models.get_db),
     admin: models.User = Depends(get_admin_user),
 ):
-    count = AiJobProcessor(db).requeue_failed(commit=False)
+    data = data or RetryFailedRequest()
+    count = AiJobProcessor(db).requeue_failed(
+        job_ids=data.job_ids,
+        error_codes=data.error_codes,
+        commit=False,
+    )
     audit_admin_action(
         db,
         request,
         admin,
         action="ai_jobs.retry_failed",
         target_type="ai_job_queue",
-        after={"requeued": count},
+        after={
+            "requeued": count,
+            "job_ids": data.job_ids,
+            "error_codes": data.error_codes,
+        },
     )
     db.commit()
     return {"requeued": count, "worker": _worker_payload(db)}
+
+
+@router.post("/jobs/reconcile")
+def reconcile_jobs(
+    data: ReconcileJobsRequest,
+    request: Request,
+    db: Session = Depends(models.get_db),
+    admin: models.User = Depends(get_admin_user),
+):
+    processor = AiJobProcessor(db)
+    preview = processor.reconcile_jobs(apply=False)
+    if data.apply:
+        if not data.token or data.token != preview["token"]:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "queue_changed",
+                    "message": "队列已变化，请重新预览核对结果",
+                    "current": preview,
+                },
+            )
+        result = processor.reconcile_jobs(apply=True, commit=False)
+        audit_admin_action(
+            db,
+            request,
+            admin,
+            action="ai_jobs.reconcile",
+            target_type="ai_job_queue",
+            after=result,
+        )
+        db.commit()
+        return {**result, "applied": True, "worker": _worker_payload(db)}
+    return {**preview, "applied": False}
 
 
 @router.post("/words/{word_id}/regenerate")

@@ -127,8 +127,17 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
         assert "ix_ai_jobs_bank_status" in {
             row[1] for row in cursor.execute("PRAGMA index_list(ai_jobs)").fetchall()
         }
+        assert {"batch_id", "started_at"}.issubset({
+            row[1] for row in cursor.execute("PRAGMA table_info(ai_jobs)")
+        })
         assert "ix_words_bank_seq" in {
             row[1] for row in cursor.execute("PRAGMA index_list(words)").fetchall()
+        }
+        assert "ix_ai_job_attempts_provider_started" in {
+            row[1]
+            for row in cursor.execute(
+                "PRAGMA index_list(ai_job_attempts)"
+            ).fetchall()
         }
         tables = {
             row[0]
@@ -143,6 +152,8 @@ def test_core_migration_merges_duplicates_and_adds_constraints(tmp_path):
             "memory_feedback",
             "memory_exposures",
             "ai_jobs",
+            "ai_job_attempts",
+            "ai_lane_states",
             "ai_quota_snapshots",
             "system_state",
             "admin_audit_logs",

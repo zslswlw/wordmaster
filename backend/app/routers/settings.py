@@ -4,13 +4,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from ..models import get_db, ApiConfig, FeatureFlags
+from ..models import get_db, AiLaneState, ApiConfig, FeatureFlags
 from ..auth import get_admin_user, get_current_user
 from ..services.ai.base import ProviderConfig
 from ..services.ai.deepseek import DeepSeekProvider
 from ..services.ai.minimax import MiniMaxProvider
 from ..services.ai.secrets import decrypt_secret, encrypt_secret
 from ..admin_consistency import RevisionConflict, audit_admin_action
+from ..clock import utc_now
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -55,6 +56,23 @@ def _config_payload(config: ApiConfig) -> dict:
     }
 
 
+def _clear_provider_lane_blocks(db: Session, provider: str) -> None:
+    lanes = (
+        ("text", "image", "audio", "minimax_text")
+        if provider == "minimax"
+        else ("text",)
+    )
+    db.query(AiLaneState).filter(AiLaneState.name.in_(lanes)).update(
+        {
+            "blocked_until": None,
+            "block_reason": None,
+            "last_error": None,
+            "updated_at": utc_now(),
+        },
+        synchronize_session=False,
+    )
+
+
 @router.get("/ai-configs")
 def list_configs(db: Session = Depends(get_db), admin=Depends(get_admin_user)):
     return [_config_payload(config) for config in db.query(ApiConfig).all()]
@@ -82,6 +100,7 @@ def create_config(
     cfg = ApiConfig(**model_data)
     db.add(cfg)
     db.flush()
+    _clear_provider_lane_blocks(db, cfg.provider)
     audit_admin_action(
         db,
         request,
@@ -140,6 +159,7 @@ def _update_existing_config(
         raise RevisionConflict(_config_payload(current) if current else {"deleted": True})
     db.expire_all()
     current = db.query(ApiConfig).filter(ApiConfig.id == config.id).first()
+    _clear_provider_lane_blocks(db, current.provider)
     after = _config_payload(current)
     if api_key:
         after["api_key_changed"] = True
@@ -171,6 +191,7 @@ def delete_config(
     if cfg.revision != expected_revision:
         raise RevisionConflict(_config_payload(cfg))
     before = _config_payload(cfg)
+    _clear_provider_lane_blocks(db, cfg.provider)
     deleted = db.query(ApiConfig).filter(
         ApiConfig.id == config_id,
         ApiConfig.revision == expected_revision,

@@ -107,19 +107,31 @@
 
     <div class="section">
       <h3>静默资源调度</h3>
-      <p class="section-desc">学习不等待生成任务；额度不足只会等待恢复，管理员操作或密钥、接口配置错误才会暂停执行器。</p>
+      <p class="section-desc">学习不等待生成任务；各通道独立处理额度、限流和配置问题，只有管理员操作会暂停全部任务。</p>
       <div class="worker-panel">
         <div class="worker-stat">
           <span>运行状态</span>
           <strong>{{ workerStateText() }}</strong>
         </div>
         <div class="worker-stat">
-          <span>MiniMax 剩余</span>
+          <span>分项额度</span>
           <strong>{{ quotaText() }}</strong>
         </div>
         <div class="worker-stat">
-          <span>正在调用 / 排队步骤</span>
-          <strong>{{ jobCountsText() }}</strong>
+          <span>真实调用</span>
+          <strong>{{ worker.queue?.real_calls || 0 }}</strong>
+        </div>
+        <div class="worker-stat">
+          <span>立即可执行</span>
+          <strong>{{ worker.queue?.ready_now || 0 }}</strong>
+        </div>
+        <div class="worker-stat">
+          <span>延迟等待</span>
+          <strong>{{ worker.queue?.delayed || 0 }}</strong>
+        </div>
+        <div class="worker-stat">
+          <span>待检查</span>
+          <strong>{{ worker.queue?.attention || 0 }}</strong>
         </div>
         <div class="worker-stat">
           <span>当前任务</span>
@@ -132,6 +144,9 @@
       <div v-if="worker.paused && worker.pause_reason" class="worker-alert">
         暂停原因：{{ worker.pause_reason }}
       </div>
+      <div v-else-if="blockedLaneText()" class="worker-alert">
+        {{ blockedLaneText() }}
+      </div>
       <div class="worker-meta">
         <span :class="{ 'stale-text': dashboardError }">{{ dashboardError ? `${dashboardError}，数据可能已过期` : `最后同步：${snapshotText()}` }}</span>
         <span v-if="dashboardLoaded">版本：{{ worker.revision }}</span>
@@ -139,12 +154,19 @@
         <span v-if="worker.queue?.last_failure_at">最近失败：{{ formatDate(worker.queue.last_failure_at) }}</span>
       </div>
       <div class="worker-breakdown">
-        <span>过去 24 小时：{{ completedBreakdownText() }}</span>
+        <span>过去 24 小时完成：{{ completedBreakdownText() }}</span>
+        <span>供应商请求：{{ throughput['24h']?.requests || 0 }}</span>
+        <span>供应商分布：{{ providerBreakdownText() }}</span>
+        <span>重试：{{ throughput['24h']?.retried_items || 0 }}</span>
         <span>排队构成：{{ pendingBreakdownText() }}</span>
         <span v-if="jobs.failed">历史未成功：{{ failedBreakdownText() }}</span>
         <span v-if="jobs.failed">失败原因：{{ failedReasonText() }}</span>
+        <span v-if="jobs.failed && latestFailureText()">最近样例：{{ latestFailureText() }}</span>
         <el-button v-if="jobs.failed" size="small" text :loading="retryingFailed" @click="retryFailedJobs">
           重试可恢复项
+        </el-button>
+        <el-button size="small" text :loading="reconcilingJobs" @click="reconcileJobs">
+          核对队列
         </el-button>
       </div>
       <div class="reserve-row">
@@ -185,13 +207,17 @@
             <el-progress :percentage="coverage[bank.id]?.complete_ready_percent || 0" :stroke-width="4" :show-text="false" style="width:100px" />
             <span class="status-text">{{ coverage[bank.id]?.complete_ready || 0 }}/{{ coverage[bank.id]?.total || bank.word_count }}</span>
           </div>
+          <div class="bank-progress-meta">
+            <span>24 小时：{{ bankDeltaText(bank.id) }}</span>
+            <span>预计完成：{{ bankEtaText(bank.id) }}</span>
+          </div>
         </div>
         <el-button
           v-if="isAdmin"
           size="small"
           text
           :loading="reprocessingBank[bank.id] || bankIsProcessing(bank.id)"
-          :disabled="!dashboardLoaded || bankIsProcessing(bank.id)"
+          :disabled="!dashboardLoaded || bankIsProcessing(bank.id) || coverage[bank.id]?.queue?.state === 'attention'"
           @click="reprocessBank(bank.id)"
         >
           {{ bankActionText(bank.id) }}
@@ -313,8 +339,9 @@ const saveFlags = async () => {
 const banks = ref<any[]>([])
 const coverage = reactive<Record<number, any>>({})
 const reprocessingBank = reactive<Record<number, boolean>>({})
-const quota = reactive<{ remaining_percent: number | null; status: string }>({ remaining_percent: null, status: 'unknown' })
+const quota = reactive<any>({ remaining_percent: null, status: 'unknown', resources: {} })
 const jobs = reactive<Record<string, number>>({})
+const throughput = reactive<any>({ '1h': {}, '24h': {}, '7d': {}, by_kind: {} })
 const worker = reactive({
   paused: false,
   pause_reason: null as string | null,
@@ -326,6 +353,7 @@ const worker = reactive({
   revision: 0,
   queue: null as any,
   runtime: null as any,
+  lanes: [] as any[],
 })
 const workerDraft = reactive({ quota_reserve_percent: 30, feedback_reserve_percent: 20 })
 const dirtyWorkerFields = new Set<string>()
@@ -337,6 +365,7 @@ let pollInFlight = false
 let viewActive = false
 let mounted = false
 const retryingFailed = ref(false)
+const reconcilingJobs = ref(false)
 
 const jobKindText: Record<string, string> = {
   bundle_text: '整理记忆方案',
@@ -350,9 +379,12 @@ const workerStateText = () => {
   if (!dashboardLoaded.value) return '加载中'
   if (worker.paused) return '已暂停'
   if (worker.state === 'running') return '正在生成'
+  if (worker.state === 'partial') return '部分受限'
   if (worker.state === 'queued') return '等待调度'
   if (worker.state === 'waiting_quota') return '等待额度'
   if (worker.state === 'waiting_rate_limit') return '限流退避'
+  if (worker.state === 'configuration_error') return '配置异常'
+  if (worker.state === 'no_progress') return '长时间无产出'
   if (worker.state === 'stalled') return '执行器失联'
   if (worker.state === 'attention') return '需要检查'
   return '空闲'
@@ -360,19 +392,19 @@ const workerStateText = () => {
 
 const quotaText = () => {
   if (!dashboardLoaded.value) return '加载中'
-  return quota.remaining_percent == null ? '无法解析' : `${quota.remaining_percent}%`
-}
-
-const jobCountsText = () => {
-  if (!dashboardLoaded.value) return '- / -'
-  return `${jobs.running || 0} / ${jobs.pending || 0}`
+  const labels: Record<string, string> = { text: '文', image: '图', audio: '音' }
+  const parts = Object.entries(labels).map(([key, label]) => {
+    const remaining = quota.resources?.[key]?.remaining_percent
+    return `${label}${remaining == null ? '未知' : `${remaining}%`}`
+  })
+  return parts.join(' · ')
 }
 
 const currentJobText = () => {
   if (!dashboardLoaded.value) return '加载中'
   const current = worker.queue?.current_jobs || []
   if (current.length) {
-    return current.map((job: any) => jobKindText[job.kind] || job.kind).join(' + ')
+    return [...new Set(current.map((job: any) => jobKindText[job.kind] || job.kind))].join(' + ')
   }
   const next = worker.queue?.next_job
   if (next) return `等待：${jobKindText[next.kind] || next.kind}`
@@ -413,7 +445,7 @@ const statusByKind = (status: string) => Object.fromEntries(
   ),
 )
 
-const completedBreakdownText = () => kindsText(worker.queue?.completed_24h || {})
+const completedBreakdownText = () => kindsText(throughput['24h']?.by_kind || {})
 const pendingBreakdownText = () => kindsText(statusByKind('pending'))
 const failedBreakdownText = () => kindsText(statusByKind('failed'))
 const errorCodeText: Record<string, string> = {
@@ -421,6 +453,10 @@ const errorCodeText: Record<string, string> = {
   manual_review: '旧版内容校验',
   job_error: '运行异常',
   provider_error: '供应商响应',
+  not_configured: '未配置',
+  rate_limited: '限流',
+  quota_reserve: '额度保留',
+  database_busy: '数据库繁忙',
   '1004': '密钥无效',
   '1008': '余额不足',
   '1026': '输入审核',
@@ -435,6 +471,39 @@ const failedReasonText = () => {
     : '无'
 }
 
+const providerBreakdownText = () => {
+  const entries = Object.entries(throughput.by_provider || {})
+  return entries.length
+    ? entries.map(([provider, value]: [string, any]) => `${provider} ${value.requests || 0}`).join(' · ')
+    : '暂无'
+}
+
+const latestFailureText = () => {
+  const sample = worker.queue?.failed_samples?.[0]
+  if (!sample) return ''
+  const kind = jobKindText[sample.kind] || sample.kind
+  const reason = errorCodeText[sample.last_error_code] || sample.last_error_code || '未分类'
+  const detail = String(sample.last_error_message || '').slice(0, 80)
+  return `${kind} · ${reason}${detail ? ` · ${detail}` : ''}`
+}
+
+const blockedLaneText = () => {
+  const blocked = (worker.lanes || []).filter((lane: any) => !['ready', 'running'].includes(lane.state))
+  if (!blocked.length) return ''
+  const labels: Record<string, string> = { text: '文字', image: '图片', audio: '播报', minimax_text: 'MiniMax 文字' }
+  return blocked.map((lane: any) => `${labels[lane.name] || lane.name}：${lane.block_reason || '等待恢复'}`).join('；')
+}
+
+const bankDeltaText = (bankId: number) => kindsText(coverage[bankId]?.completed_24h || {})
+const bankEtaText = (bankId: number) => {
+  const value = coverage[bankId]?.eta_at
+  if (!value) return '数据不足'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime())
+    ? '数据不足'
+    : new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' }).format(parsed)
+}
+
 const bankIsProcessing = (bankId: number) =>
   Number(coverage[bankId]?.queue?.active_jobs || 0) > 0
 
@@ -445,7 +514,7 @@ const bankActionText = (bankId: number) => {
   if (queue?.active_jobs && worker.state === 'stalled') return '执行器失联'
   if (queue?.state === 'running') return `处理中 (${queue.active_jobs})`
   if (queue?.state === 'queued') return `排队中 (${queue.active_jobs})`
-  if (queue?.state === 'attention') return '重试'
+  if (queue?.state === 'attention') return '待检查'
   return '补全'
 }
 
@@ -464,9 +533,11 @@ const scheduleDashboardPoll = () => {
   if (!viewActive) return
   const activeStates = new Set([
     'running',
+    'partial',
     'queued',
     'waiting_quota',
     'waiting_rate_limit',
+    'no_progress',
     'stalled',
   ])
   const delay = activeStates.has(worker.state) ? 5000 : 15000
@@ -483,6 +554,8 @@ const loadDashboard = async () => {
     Object.assign(quota, data.quota || {})
     Object.keys(jobs).forEach(key => delete jobs[key])
     Object.assign(jobs, data.jobs || {})
+    Object.keys(throughput).forEach(key => delete throughput[key])
+    Object.assign(throughput, data.throughput || {})
     Object.assign(worker, data.worker || {})
     for (const field of ['quota_reserve_percent', 'feedback_reserve_percent'] as const) {
       if (!dirtyWorkerFields.has(field)) workerDraft[field] = worker[field]
@@ -544,7 +617,6 @@ const toggleWorker = async (expectedRevision = worker.revision, desired = !worke
   try {
     const { data } = await aiAPI.updateWorker({ paused: desired, expected_revision: expectedRevision })
     Object.assign(worker, data)
-    if (data.requeued_failed) ElMessage.success(`已恢复并重新排队 ${data.requeued_failed} 个可恢复步骤`)
     await loadDashboard()
   } catch (e: any) {
     const conflict = e.response?.data
@@ -574,6 +646,29 @@ const retryFailedJobs = async () => {
     ElMessage.error(e.response?.data?.detail || '重新排队失败')
   } finally {
     retryingFailed.value = false
+  }
+}
+
+const reconcileJobs = async () => {
+  reconcilingJobs.value = true
+  try {
+    const { data: preview } = await aiAPI.reconcileJobs({ apply: false })
+    if (!preview.total) {
+      ElMessage.success('队列状态正常，没有无效步骤')
+      return
+    }
+    await ElMessageBox.confirm(
+      `发现 ${preview.total} 个已无须执行的步骤，确认标记为已取消？`,
+      '核对队列',
+      { confirmButtonText: '确认核对', cancelButtonText: '暂不处理', type: 'warning' },
+    )
+    const { data } = await aiAPI.reconcileJobs({ apply: true, token: preview.token })
+    ElMessage.success(`已取消 ${data.total} 个无效步骤`)
+    await loadDashboard()
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e.response?.data?.detail?.message || '队列核对失败')
+  } finally {
+    reconcilingJobs.value = false
   }
 }
 
@@ -814,15 +909,15 @@ const testConnection = async (provider: string) => {
   border: 1px solid var(--color-border-light);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr) auto;
+  grid-template-columns: repeat(7, minmax(60px, 1fr)) auto;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .worker-stat {
   min-width: 0;
   span { display: block; font-size: 0.6875rem; color: var(--color-text-muted); }
-  strong { display: block; margin-top: 2px; font-size: 0.875rem; color: var(--color-text-primary); }
+  strong { display: block; margin-top: 2px; font-size: 0.875rem; color: var(--color-text-primary); overflow-wrap: anywhere; }
 }
 
 .worker-meta {
@@ -900,6 +995,7 @@ const testConnection = async (provider: string) => {
 .status-line { display: flex; align-items: center; gap: 6px; }
 .status-label { font-size: 0.6875rem; color: var(--color-text-muted); width: 28px; flex-shrink: 0; }
 .status-text { font-size: 0.6875rem; color: var(--color-text-secondary); white-space: nowrap; }
+.bank-progress-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 2px; font-size: 0.6875rem; color: var(--color-text-muted); }
 .text-muted { color: var(--color-text-muted); }
 
 .feedback-row {
@@ -982,6 +1078,7 @@ const testConnection = async (provider: string) => {
   .provider-cards { grid-template-columns: 1fr; }
   .toggle-desc { max-width: 220px; }
   .worker-panel { grid-template-columns: 1fr 1fr; }
+  .worker-panel > .el-button { grid-column: 1 / -1; width: 100%; }
   .worker-meta { justify-content: flex-start; flex-wrap: wrap; gap: 4px 12px; }
   .reserve-row { grid-template-columns: 1fr auto; }
   .bank-info { flex-basis: 90px; }

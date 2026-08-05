@@ -235,9 +235,15 @@ def queue_ai_job(
     ).first()
     if existing:
         existing.priority = min(existing.priority, priority)
-        if existing.status == "failed" and existing.attempts < existing.max_attempts:
+        if existing.status in {"completed", "cancelled"}:
             existing.status = "pending"
+            existing.attempts = 0
             existing.available_at = utc_now()
+            existing.last_error_code = None
+            existing.last_error_message = None
+            existing.batch_id = None
+            existing.started_at = None
+            existing.updated_at = utc_now()
         return existing
 
     job = models.AiJob(
@@ -291,7 +297,7 @@ def seed_word_evolution(
                 models.MemoryAsset.status == "ready",
             ).all()
         }
-        for asset_type, asset_priority in (("image", priority + 20), ("audio", priority + 25)):
+        for asset_type, asset_priority in (("image", priority + 20), ("audio", priority + 20)):
             if asset_type not in ready_types:
                 queue_ai_job(
                     db,

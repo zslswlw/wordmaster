@@ -28,6 +28,7 @@
       <el-icon class="is-loading"><Loading /></el-icon>
       <span>AI 正在分析错题模式...</span>
     </div>
+    <div v-else-if="analysisError" class="generation-error">{{ analysisError }}</div>
     <el-button v-if="!analysis && !analyzing && errors.length > 0 && analysisFailed" text type="primary" :loading="analyzing" @click="runAnalysis">
       <el-icon><MagicStick /></el-icon> 重试 AI 分析
     </el-button>
@@ -41,7 +42,8 @@
       <el-icon class="is-loading"><Loading /></el-icon>
       <span>AI 正在生成微故事...</span>
     </div>
-    <el-button v-if="!story && !generatingStory && errors.length >= 3 && storyFailed" text type="primary" :loading="generatingStory" @click="runStory" class="story-btn">
+    <div v-else-if="storyError" class="generation-error">{{ storyError }}</div>
+    <el-button v-if="!story && !generatingStory && storyWords.length >= 3 && storyFailed" text type="primary" :loading="generatingStory" @click="runStory" class="story-btn">
       <el-icon><MagicStick /></el-icon> 重试生成微故事
     </el-button>
 
@@ -67,9 +69,15 @@ const emit = defineEmits(['done'])
 const analyzing = ref(false)
 const analysis = ref('')
 const analysisFailed = ref(false)
+const analysisError = ref('')
 const generatingStory = ref(false)
 const story = ref('')
 const storyFailed = ref(false)
+const storyError = ref('')
+
+const storyWords = computed(() => Array.from(new Set(
+  props.errors.map(error => error.correct.trim()).filter(Boolean)
+)))
 
 const renderedAnalysis = computed(() => {
   return analysis.value
@@ -79,20 +87,30 @@ onMounted(async () => {
   if (props.errors.length === 0) return
   try {
     const { data } = await settingsAPI.getFeatureFlags()
-    if (data.error_analysis_enabled) runAnalysis()
-    if (data.story_enabled && props.errors.length >= 3) runStory()
+    if (data.error_analysis_enabled) await runAnalysis()
+    if (data.story_enabled && storyWords.value.length >= 3) await runStory()
   } catch {
-    runAnalysis()
-    if (props.errors.length >= 3) runStory()
+    await runAnalysis()
+    if (storyWords.value.length >= 3) await runStory()
   }
 })
+
+const apiErrorMessage = (error: any, fallback: string) => {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail.message === 'string') return detail.message
+  return fallback
+}
 
 const runAnalysis = async () => {
   if (props.errors.length === 0) return
   analyzing.value = true
   analysisFailed.value = false
+  analysisError.value = ''
+  analysis.value = ''
   try {
     const { data } = await aiAPI.analyzeErrors(props.errors)
+    if (data.status === 'disabled') return
     // summary 优先；如果为空或缺失，从 patterns 构建可读文本
     if (data.summary) {
       analysis.value = data.summary
@@ -101,23 +119,31 @@ const runAnalysis = async () => {
     } else {
       analysis.value = '未发现明显拼写模式，继续加油！'
     }
-  } catch {
+  } catch (error) {
     analysisFailed.value = true
+    analysisError.value = apiErrorMessage(error, 'AI 分析暂时不可用，请稍后重试')
   } finally {
     analyzing.value = false
   }
 }
 
 const runStory = async () => {
+  if (storyWords.value.length < 3) return
   generatingStory.value = true
   storyFailed.value = false
+  storyError.value = ''
+  story.value = ''
   try {
-    const words = props.errors.map(e => e.correct)
-    const { data } = await aiAPI.generateStory(words)
+    const { data } = await aiAPI.generateStory(storyWords.value)
+    if (data.status === 'disabled') return
     story.value = data.story || ''
-    if (!data.story) storyFailed.value = true
-  } catch {
+    if (!data.story) {
+      storyFailed.value = true
+      storyError.value = '微故事没有生成完整，请重试'
+    }
+  } catch (error) {
     storyFailed.value = true
+    storyError.value = apiErrorMessage(error, '微故事暂时无法生成，请稍后重试')
   } finally {
     generatingStory.value = false
   }
@@ -176,6 +202,13 @@ const runStory = async () => {
 .analysis-loading {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 16px; color: var(--color-text-muted); font-size: 0.8125rem;
+}
+
+.generation-error {
+  margin: 8px 0 2px;
+  color: var(--color-danger);
+  font-size: 0.8125rem;
+  line-height: 1.6;
 }
 
 // story

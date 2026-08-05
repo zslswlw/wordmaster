@@ -87,6 +87,7 @@ def test_minimax_chat_defaults_to_m3(monkeypatch):
     assert asyncio.run(provider.chat([{"role": "user", "content": "test"}])) == "{}"
     assert captured["body"]["model"] == "MiniMax-M3"
     assert captured["body"]["max_completion_tokens"] == 1200
+    assert captured["body"]["thinking"] == {"type": "disabled"}
     assert "max_tokens" not in captured["body"]
 
 
@@ -116,3 +117,147 @@ def test_minimax_error_codes_have_distinct_retry_policy():
             {"base_resp": {"status_code": 1027, "status_msg": "sensitive"}},
             "image",
         )
+
+
+def test_chat_json_strips_reasoning_but_rejects_truncated_payload(monkeypatch):
+    from app.services.ai import minimax as minimax_module
+
+    responses = iter([
+        '<think>{"draft": true}</think>{"ok": true}',
+        '{"ok":',
+    ])
+
+    def handler(_request: httpx.Request):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": next(responses)}}],
+            "base_resp": {"status_code": 0, "status_msg": "success"},
+        })
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        minimax_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_client(transport=transport),
+    )
+    provider = MiniMaxProvider(ProviderConfig(
+        api_key="test",
+        api_base="https://api.minimaxi.com",
+        text_model="MiniMax-M3",
+    ))
+
+    assert asyncio.run(provider.chat_json([{"role": "user", "content": "test"}])) == {"ok": True}
+    with pytest.raises(RuntimeError, match="incomplete AI output was rejected"):
+        asyncio.run(provider.chat_json([{"role": "user", "content": "test"}]))
+
+
+def test_minimax_requests_are_single_flight_across_capabilities(monkeypatch):
+    from app.services.ai import minimax as minimax_module
+
+    active = 0
+    maximum_active = 0
+    image = b"\x89PNG\r\n\x1a\n" + (b"image" * 40)
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def request(self, method, url, **kwargs):
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+            if url.endswith("/v1/image_generation"):
+                import base64
+                return httpx.Response(200, json={
+                    "data": {"image_base64": [base64.b64encode(image).decode()]},
+                    "base_resp": {"status_code": 0},
+                })
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "story"}}],
+                "base_resp": {"status_code": 0},
+            })
+
+    monkeypatch.setattr(minimax_module.httpx, "AsyncClient", FakeClient)
+    provider = MiniMaxProvider(ProviderConfig(
+        api_key="test",
+        api_base="https://api.minimaxi.com",
+        text_model="MiniMax-M3",
+        image_model="image-01",
+    ))
+
+    async def run_requests():
+        return await asyncio.gather(
+            provider.chat([{"role": "user", "content": "test"}]),
+            provider.generate_image("one red boat, no text"),
+        )
+
+    result = asyncio.run(run_requests())
+
+    assert result == ["story", image]
+    assert maximum_active == 1
+
+
+def test_interactive_text_does_not_wait_indefinitely_behind_media(monkeypatch):
+    from app.services.ai import minimax as minimax_module
+
+    image_started = None
+    release_image = None
+    image = b"\x89PNG\r\n\x1a\n" + (b"image" * 40)
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def request(self, method, url, **kwargs):
+            if url.endswith("/v1/image_generation"):
+                import base64
+                image_started.set()
+                await release_image.wait()
+                return httpx.Response(200, json={
+                    "data": {"image_base64": [base64.b64encode(image).decode()]},
+                    "base_resp": {"status_code": 0},
+                })
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "story"}}],
+                "base_resp": {"status_code": 0},
+            })
+
+    monkeypatch.setattr(minimax_module.httpx, "AsyncClient", FakeClient)
+    provider = MiniMaxProvider(ProviderConfig(
+        api_key="test",
+        api_base="https://api.minimaxi.com",
+        text_model="MiniMax-M3",
+        image_model="image-01",
+    ))
+
+    async def run_requests():
+        nonlocal image_started, release_image
+        image_started = asyncio.Event()
+        release_image = asyncio.Event()
+        image_task = asyncio.create_task(provider.generate_image("one red boat, no text"))
+        await image_started.wait()
+        try:
+            with pytest.raises(RateLimitError, match="request queue is busy"):
+                await provider.chat(
+                    [{"role": "user", "content": "test"}],
+                    queue_timeout=0.01,
+                )
+        finally:
+            release_image.set()
+            await image_task
+
+    asyncio.run(run_requests())

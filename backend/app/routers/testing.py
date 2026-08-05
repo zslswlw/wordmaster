@@ -105,9 +105,18 @@ def _clear_user_data(db: Session, user_id: int) -> None:
             db.query(models.WordMemoryLink).filter(
                 models.WordMemoryLink.word_id.in_(word_ids)
             ).delete(synchronize_session=False)
+        job_ids = db.query(models.AiJob.id).filter(
+            models.AiJob.bank_id.in_(bank_ids)
+        )
+        db.query(models.AiJobAttempt).filter(
+            models.AiJobAttempt.job_id.in_(job_ids)
+        ).delete(synchronize_session=False)
         db.query(models.AiJob).filter(
             models.AiJob.bank_id.in_(bank_ids)
         ).delete(synchronize_session=False)
+        db.query(models.AiLaneState).filter(
+            models.AiLaneState.cursor_bank_id.in_(bank_ids)
+        ).update({"cursor_bank_id": None}, synchronize_session=False)
         db.query(Word).filter(Word.bank_id.in_(bank_ids)).delete(
             synchronize_session=False
         )

@@ -158,7 +158,39 @@ NEW_TABLES = {
             idempotency_key VARCHAR NOT NULL UNIQUE,
             last_error_code VARCHAR,
             last_error_message TEXT,
+            batch_id VARCHAR(36),
+            started_at DATETIME,
             created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        )
+    """,
+    "ai_job_attempts": """
+        CREATE TABLE IF NOT EXISTS ai_job_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id VARCHAR(36) NOT NULL REFERENCES ai_jobs(id),
+            batch_id VARCHAR(36),
+            kind VARCHAR NOT NULL,
+            provider VARCHAR,
+            model VARCHAR,
+            outcome VARCHAR NOT NULL,
+            started_at DATETIME NOT NULL,
+            finished_at DATETIME NOT NULL,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            error_code VARCHAR,
+            retry_at DATETIME
+        )
+    """,
+    "ai_lane_states": """
+        CREATE TABLE IF NOT EXISTS ai_lane_states (
+            name VARCHAR PRIMARY KEY,
+            cursor_bank_id INTEGER REFERENCES word_banks(id),
+            blocked_until DATETIME,
+            block_reason VARCHAR,
+            current_batch_id VARCHAR(36),
+            current_job_ids TEXT,
+            heartbeat_at DATETIME,
+            last_success_at DATETIME,
+            last_error TEXT,
             updated_at DATETIME NOT NULL
         )
     """,
@@ -438,6 +470,8 @@ def migrate(db_path=None):
         "priority_bank_id",
         "INTEGER REFERENCES word_banks(id)",
     )
+    _add_column(cursor, "ai_jobs", "batch_id", "VARCHAR(36)")
+    _add_column(cursor, "ai_jobs", "started_at", "DATETIME")
 
     # 确保 feature_flags 有默认行
     cursor.execute("SELECT COUNT(*) FROM feature_flags")
@@ -500,6 +534,25 @@ def migrate(db_path=None):
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS ix_ai_jobs_bank_status "
         "ON ai_jobs(bank_id, status, priority, available_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_ai_jobs_batch_id ON ai_jobs(batch_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_ai_job_attempts_started "
+        "ON ai_job_attempts(started_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_ai_job_attempts_kind_started "
+        "ON ai_job_attempts(kind, started_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_ai_job_attempts_provider_started "
+        "ON ai_job_attempts(provider, started_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS ix_ai_job_attempts_job_started "
+        "ON ai_job_attempts(job_id, started_at)"
     )
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS ix_words_bank_seq "

@@ -74,9 +74,18 @@ def _delete_current_user_data(db: Session, user_id: int):
             db.query(models.WordMemoryLink).filter(
                 models.WordMemoryLink.word_id.in_(word_ids)
             ).delete(synchronize_session=False)
+        job_ids = db.query(models.AiJob.id).filter(
+            models.AiJob.bank_id.in_(bank_ids)
+        )
+        db.query(models.AiJobAttempt).filter(
+            models.AiJobAttempt.job_id.in_(job_ids)
+        ).delete(synchronize_session=False)
         db.query(models.AiJob).filter(
             models.AiJob.bank_id.in_(bank_ids)
         ).delete(synchronize_session=False)
+        db.query(models.AiLaneState).filter(
+            models.AiLaneState.cursor_bank_id.in_(bank_ids)
+        ).update({"cursor_bank_id": None}, synchronize_session=False)
         db.query(Word).filter(Word.bank_id.in_(bank_ids)).delete(synchronize_session=False)
         db.query(WordBank).filter(WordBank.id.in_(bank_ids)).delete(synchronize_session=False)
 
@@ -396,7 +405,7 @@ def _restore_memory(
         if not bundle:
             seed_word_evolution(db, word)
             continue
-        for asset_type, priority in (("image", 30), ("audio", 35)):
+        for asset_type, priority in (("image", 30), ("audio", 30)):
             ready = db.query(models.MemoryAsset).filter(
                 models.MemoryAsset.bundle_id == bundle.id,
                 models.MemoryAsset.asset_type == asset_type,
@@ -799,6 +808,16 @@ def _finish_maintenance(
         {
             "status": "pending",
             "available_at": utc_now(),
+            "batch_id": None,
+            "started_at": None,
+            "updated_at": utc_now(),
+        },
+        synchronize_session=False,
+    )
+    db.query(models.AiLaneState).update(
+        {
+            "current_batch_id": None,
+            "current_job_ids": None,
             "updated_at": utc_now(),
         },
         synchronize_session=False,

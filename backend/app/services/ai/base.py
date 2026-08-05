@@ -62,11 +62,15 @@ class BaseProvider(ABC):
         """文本对话, 返回回复内容"""
 
     async def chat_json(self, messages: list[dict], **kwargs) -> dict:
-        """文本对话并解析 JSON 返回"""
+        """Parse one complete JSON response without repairing truncated output."""
         import json
         import re
         text = await self.chat(messages, **kwargs)
         text = text.strip()
+
+        # M3 may include reasoning tags when an upstream gateway ignores the
+        # non-thinking switch. Reasoning is never part of the business payload.
+        text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
 
         # 提取 markdown 代码块
         if text.startswith("```"):
@@ -80,27 +84,11 @@ class BaseProvider(ABC):
 
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
-            # 尝试修复截断的 JSON: 补全缺失的闭合
-            fixed = text.rstrip()
-            # 移除尾部不完整的键/值
-            while fixed and fixed[-1] not in "}]\"":
-                fixed = fixed[:-1]
-            # 补全可能缺失的引号和括号
-            open_braces = fixed.count("{") - fixed.count("}")
-            open_brackets = fixed.count("[") - fixed.count("]")
-            in_string = (fixed.count('"') % 2) != 0
-            if in_string:
-                fixed += '"'
-            fixed += "]" * open_brackets
-            fixed += "}" * open_braces
-            try:
-                return json.loads(fixed)
-            except json.JSONDecodeError as e:
-                raise RuntimeError(
-                    f"JSON decode failed after repair. Original error: {e}. "
-                    f"Raw text (last 200 chars): ...{text[-200:]}"
-                )
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"JSON decode failed; incomplete AI output was rejected. "
+                f"Raw text (last 200 chars): ...{text[-200:]}"
+            ) from exc
 
     async def generate_image(self, prompt: str, **kwargs) -> bytes:
         """图像生成, 返回图片二进制数据。不支持则 raise NotImplementedError"""

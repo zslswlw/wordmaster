@@ -148,8 +148,10 @@ export const aiAPI = {
   reprocessBank: (bankId: number) => api.post(`/ai/reprocess-bank/${bankId}`),
   enrichWord: (wordId: number) => api.post(`/ai/enrich-word/${wordId}`),
   generateImage: (wordId: number) => api.post(`/ai/generate-image/${wordId}`),
-  analyzeErrors: (errors: Array<{ word: string; correct: string; user: string; meaning?: string }>) => api.post('/ai/analyze-errors', { errors }),
-  generateStory: (words: string[]) => api.post('/ai/story', { words }),
+  analyzeErrors: (errors: Array<{ word: string; correct: string; user: string; meaning?: string }>) =>
+    api.post('/ai/analyze-errors', { errors }, { timeout: 180000 }),
+  generateStory: (words: string[]) =>
+    api.post('/ai/story', { words }, { timeout: 180000 }),
   distinguish: (word1: string, word2: string, meaning1?: string, meaning2?: string) => api.post('/ai/distinguish', { word1, meaning1: meaning1 || '', word2, meaning2: meaning2 || '' }),
   submitFeedback: (data: { word_id: number; bundle_id?: number; component: string; reason: string; detail?: string }) =>
     api.post('/ai/evolution/feedback', data),
@@ -164,7 +166,8 @@ export const aiAPI = {
   jobs: (status?: string) => api.get('/ai/evolution/jobs', { params: { status } }),
   worker: () => api.get('/ai/evolution/worker'),
   updateWorker: (data: any) => api.patch('/ai/evolution/worker', data),
-  retryFailedJobs: () => api.post('/ai/evolution/jobs/retry-failed'),
+  retryFailedJobs: (data: { job_ids?: string[]; error_codes?: string[] } = {}) => api.post('/ai/evolution/jobs/retry-failed', data),
+  reconcileJobs: (data: { apply: boolean; token?: string }) => api.post('/ai/evolution/jobs/reconcile', data),
   regenerateWord: (wordId: number) => api.post(`/ai/evolution/words/${wordId}/regenerate`),
   editBundle: (bundleId: number, data: any) => api.put(`/ai/evolution/bundles/${bundleId}`, data),
   activateBundle: (wordId: number, bundleId: number, expectedActiveBundleId: number | null) =>

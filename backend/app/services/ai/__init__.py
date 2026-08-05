@@ -1,15 +1,25 @@
 """AI 服务门面 — 统一管理 DeepSeek + MiniMax Provider"""
+import json
 import logging
 import os
 import re
+import time
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+)
 from sqlalchemy.orm import Session
 
 from .base import (
     BaseProvider,
     ConfigurationError,
+    ContentRejectedError,
     ProviderConfig,
     ProviderError,
     RateLimitError,
@@ -49,6 +59,7 @@ class MemoryBundleCandidate(BaseModel):
     scores: MemoryQualityScores
     approved: bool
     _generation_model: Optional[str] = PrivateAttr(default=None)
+    _fallback_errors: list[dict] = PrivateAttr(default_factory=list)
 
     @field_validator("primary_meaning")
     @classmethod
@@ -94,6 +105,36 @@ class MemoryBundleCandidate(BaseModel):
         return self._generation_model
 
 
+class MemoryBundleBatchItem(MemoryBundleCandidate):
+    job_id: str
+
+
+class ErrorPatternCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(min_length=1, max_length=48)
+    name: str = Field(min_length=1, max_length=40)
+    words: list[str] = Field(min_length=1, max_length=50)
+    explanation: str = Field(min_length=1, max_length=300)
+    practice: list[str] = Field(default_factory=list, max_length=12)
+
+
+class ErrorAnalysisCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    patterns: list[ErrorPatternCandidate] = Field(default_factory=list, max_length=12)
+    summary: str = Field(min_length=1, max_length=400)
+
+
+class InteractiveAiGenerationError(RuntimeError):
+    """Safe, user-facing failure for synchronous learning-report features."""
+
+    def __init__(self, code: str, public_message: str):
+        super().__init__(public_message)
+        self.code = code
+        self.public_message = public_message
+
+
 class AiService:
     """AI 服务门面"""
 
@@ -101,6 +142,7 @@ class AiService:
         self.db = db
         self._deepseek: Optional[DeepSeekProvider] = None
         self._minimax: Optional[MiniMaxProvider] = None
+        self.batch_fallback_error: Optional[dict] = None
         ff = db.query(models.FeatureFlags).first()
         self.flags = ff or models.FeatureFlags(id=1)
 
@@ -137,18 +179,52 @@ class AiService:
     def text_provider(self) -> Optional[BaseProvider]:
         return self.minimax or self.deepseek
 
+    def _text_providers(self) -> list[BaseProvider]:
+        providers = []
+        for provider in (self.minimax, self.deepseek):
+            if provider is not None and provider not in providers:
+                providers.append(provider)
+        return providers
+
+    @staticmethod
+    def _provider_identity(provider: BaseProvider) -> tuple[str, str]:
+        name = "minimax" if isinstance(provider, MiniMaxProvider) else "deepseek"
+        return name, provider.config.text_model or name
+
+    @staticmethod
+    def _interactive_text_options(
+        provider: BaseProvider,
+        *,
+        temperature: float,
+        token_limit: int,
+    ) -> dict:
+        if isinstance(provider, MiniMaxProvider):
+            return {
+                "temperature": temperature,
+                "max_completion_tokens": token_limit,
+                "thinking": {"type": "disabled"},
+                "queue_timeout": 15,
+            }
+        return {"temperature": temperature, "max_tokens": token_limit}
+
     async def generate_memory_candidate(
         self,
         word: models.Word,
         *,
         feedback_context: str = "",
         validation_feedback: str = "",
+        prefer_deepseek: bool = False,
     ) -> MemoryBundleCandidate:
         """Generate one strictly validated memory plan; callers own retry policy."""
 
+        provider_order = (
+            (self.deepseek, self.minimax)
+            if prefer_deepseek
+            else (self.minimax, self.deepseek)
+        )
         providers = [
             provider
-            for provider in (self.minimax, self.deepseek)
+            for provider in provider_order
             if provider is not None
         ]
         if not providers:
@@ -156,6 +232,47 @@ class AiService:
                 "MiniMax/DeepSeek 文本模型未配置",
                 code="not_configured",
             )
+        last_error = None
+        fallback_errors = []
+        for provider in providers:
+            request_started = time.perf_counter()
+            try:
+                candidate = await self._candidate_from_provider(
+                    provider,
+                    word,
+                    feedback_context=feedback_context,
+                    validation_feedback=validation_feedback,
+                )
+                candidate._fallback_errors = fallback_errors
+                return candidate
+            # Provider/network failures may use the configured fallback. Schema
+            # and quality failures belong to the content and must be repaired,
+            # not hidden by silently switching models.
+            except ContentRejectedError:
+                raise
+            except (ProviderError, RateLimitError, RuntimeError) as exc:
+                last_error = exc
+                fallback_errors.append({
+                    "provider": (
+                        "minimax" if isinstance(provider, MiniMaxProvider) else "deepseek"
+                    ),
+                    "model": provider.config.text_model,
+                    "duration_ms": max(
+                        0,
+                        round((time.perf_counter() - request_started) * 1000),
+                    ),
+                    "error_code": getattr(exc, "code", None) or exc.__class__.__name__,
+                })
+        raise last_error or ProviderError("文字模型调用失败")
+
+    async def _candidate_from_provider(
+        self,
+        provider: BaseProvider,
+        word: models.Word,
+        *,
+        feedback_context: str = "",
+        validation_feedback: str = "",
+    ) -> MemoryBundleCandidate:
         normalized = MeaningNormalizer.normalize(word.meaning)
         prompt = prompts.MEMORY_BUNDLE.format(
             word=word.word,
@@ -180,23 +297,131 @@ class AiService:
             },
             {"role": "user", "content": prompt},
         ]
-        last_error = None
-        for provider in providers:
+        options = {"temperature": 0.35}
+        if isinstance(provider, MiniMaxProvider):
+            options.update({
+                "max_completion_tokens": 1200,
+                "thinking": {"type": "disabled"},
+            })
+        else:
+            options["max_tokens"] = 1200
+        data = await provider.chat_json(messages, **options)
+        candidate = MemoryBundleCandidate.model_validate(data)
+        if not candidate.quality_passed():
+            raise ValueError("AI 记忆方案质量评分未达到 4/5")
+        candidate._generation_model = provider.config.text_model
+        return candidate
+
+    async def generate_memory_candidates(
+        self,
+        entries: list[tuple[str, models.Word]],
+        *,
+        prefer_deepseek: bool = False,
+    ) -> tuple[dict[str, MemoryBundleCandidate], dict[str, str]]:
+        """Generate up to five initial bundles in one MiniMax request."""
+
+        if not entries:
+            return {}, {}
+        if len(entries) > 5:
+            raise ValueError("Memory bundle batch cannot exceed five items")
+        provider = None if prefer_deepseek else self.minimax
+        if not provider:
+            candidates = {}
+            errors = {}
+            for job_id, word in entries:
+                try:
+                    candidates[job_id] = await self.generate_memory_candidate(
+                        word,
+                        prefer_deepseek=prefer_deepseek,
+                    )
+                except Exception as exc:
+                    errors[job_id] = str(exc)[:600]
+            return candidates, errors
+
+        items = []
+        for job_id, word in entries:
+            normalized = MeaningNormalizer.normalize(word.meaning)
+            items.append({
+                "job_id": job_id,
+                "word": word.word,
+                "phonetic": word.phonetic or "",
+                "normalized_pos": normalized.normalized_pos or "无法确定",
+                "primary_meaning": normalized.primary_meaning,
+            })
+        messages = [
+            {
+                "role": "system",
+                "content": "你是严谨的词汇记忆内容编辑。直接输出符合 Schema 的 JSON，不进行长推理。",
+            },
+            {
+                "role": "user",
+                "content": prompts.MEMORY_BUNDLE_BATCH.format(
+                    items_json=json.dumps(items, ensure_ascii=False),
+                ),
+            },
+        ]
+        request_started = time.perf_counter()
+        try:
+            data = await provider.chat_json(
+                messages,
+                temperature=0.35,
+                max_completion_tokens=max(2400, len(entries) * 900),
+                thinking={"type": "disabled"},
+            )
+        except ContentRejectedError:
+            raise
+        except (ProviderError, RateLimitError, RuntimeError, TypeError, ValueError) as exc:
+            if not self.deepseek:
+                raise
+            self.batch_fallback_error = {
+                "provider": "minimax",
+                "model": provider.config.text_model or "MiniMax-M3",
+                "duration_ms": max(0, round((time.perf_counter() - request_started) * 1000)),
+                "error_code": getattr(exc, "code", None) or exc.__class__.__name__,
+            }
+            candidates = {}
+            errors = {}
+            for job_id, word in entries:
+                try:
+                    candidates[job_id] = await self._candidate_from_provider(
+                        self.deepseek,
+                        word,
+                    )
+                except Exception as exc:
+                    errors[job_id] = str(exc)[:600]
+            return candidates, errors
+        expected = {job_id for job_id, _word in entries}
+        seen: set[str] = set()
+        candidates: dict[str, MemoryBundleCandidate] = {}
+        errors: dict[str, str] = {}
+        if not isinstance(data, dict) or set(data) != {"items"}:
+            message = "批量响应顶层必须只包含 items"
+            return {}, {job_id: message for job_id in expected}
+        raw_items = data.get("items")
+        if not isinstance(raw_items, list):
+            message = "批量响应 items 必须是数组"
+            return {}, {job_id: message for job_id in expected}
+        for raw_item in raw_items:
+            raw_job_id = raw_item.get("job_id") if isinstance(raw_item, dict) else None
+            if raw_job_id not in expected or raw_job_id in seen:
+                continue
+            seen.add(raw_job_id)
             try:
-                options = {"temperature": 0.35}
-                if isinstance(provider, MiniMaxProvider):
-                    options["max_completion_tokens"] = 1200
-                else:
-                    options["max_tokens"] = 1200
-                data = await provider.chat_json(messages, **options)
-                candidate = MemoryBundleCandidate.model_validate(data)
-                if not candidate.quality_passed():
-                    raise ValueError("AI 记忆方案质量评分未达到 4/5")
-                candidate._generation_model = provider.config.text_model
-                return candidate
-            except (ProviderError, RateLimitError, ValueError, TypeError, RuntimeError) as exc:
-                last_error = exc
-        raise last_error or ProviderError("文字模型调用失败")
+                item = MemoryBundleBatchItem.model_validate(raw_item)
+            except (ValueError, TypeError) as exc:
+                errors[raw_job_id] = str(exc)[:600]
+                continue
+            if item.job_id != raw_job_id:
+                errors[raw_job_id] = "批量响应任务标识不一致"
+                continue
+            if not item.quality_passed():
+                errors[item.job_id] = "AI 记忆方案质量评分未达到 4/5"
+                continue
+            item._generation_model = provider.config.text_model
+            candidates[item.job_id] = item
+        for missing in expected - seen:
+            errors[missing] = "批量响应缺少对应项目"
+        return candidates, errors
 
     # ========== 单词增强 ==========
 
@@ -389,42 +614,219 @@ class AiService:
     # ========== 错题分析 ==========
 
     async def analyze_errors(self, errors: list[dict]) -> dict:
-        """分析错题模式"""
+        """Generate and validate an actionable spelling-error report."""
         if not self.flags.error_analysis_enabled:
-            return {"patterns": [], "summary": ""}
-        if not self.text_provider:
-            return {"patterns": [], "summary": "AI 未配置"}
-        try:
-            import json
-            errors_json = json.dumps(errors, ensure_ascii=False, indent=2)
-            prompt = prompts.ANALYZE_ERRORS.format(errors_json=errors_json)
-            messages = [
-                {"role": "system", "content": "You are an English spelling analyst. Always return valid JSON."},
-                {"role": "user", "content": prompt},
-            ]
-            return await self.text_provider.chat_json(messages, temperature=0.3, max_tokens=2048)
-        except Exception as e:
-            logger.error(f"Error analysis failed: {e}")
-            return {"patterns": [], "summary": f"分析失败: {str(e)}"}
+            return {"patterns": [], "summary": "", "status": "disabled"}
+
+        providers = self._text_providers()
+        if not providers:
+            raise InteractiveAiGenerationError(
+                "ai_not_configured",
+                "AI 分析服务尚未配置，请联系管理员",
+            )
+
+        submitted_words = {
+            str(item.get("correct") or item.get("word") or "").strip().lower():
+            str(item.get("correct") or item.get("word") or "").strip()
+            for item in errors
+            if str(item.get("correct") or item.get("word") or "").strip()
+        }
+        errors_json = json.dumps(errors, ensure_ascii=False, indent=2)
+        base_prompt = prompts.ANALYZE_ERRORS.format(errors_json=errors_json)
+        output_failures = 0
+
+        for provider in providers:
+            provider_name, model = self._provider_identity(provider)
+            validation_feedback = ""
+            for attempt in range(2):
+                prompt = base_prompt
+                if validation_feedback:
+                    prompt += (
+                        "\n\n上一版输出未通过校验："
+                        f"{validation_feedback}。请重新输出完整 JSON，不要解释。"
+                    )
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是严谨的英语拼写错误分析员。这是简短的结构化编辑任务，"
+                            "不需要展开推理，只输出符合要求的 JSON。"
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+                try:
+                    data = await provider.chat_json(
+                        messages,
+                        **self._interactive_text_options(
+                            provider,
+                            temperature=0.25 if attempt else 0.35,
+                            token_limit=1800,
+                        ),
+                    )
+                    candidate = ErrorAnalysisCandidate.model_validate(data)
+                    for pattern in candidate.patterns:
+                        normalized_words = []
+                        for word in pattern.words:
+                            source_word = submitted_words.get(word.strip().lower())
+                            if source_word is None:
+                                raise ValueError(f"分析引用了未提交的单词：{word}")
+                            if source_word not in normalized_words:
+                                normalized_words.append(source_word)
+                        pattern.words = normalized_words
+                    result = candidate.model_dump()
+                    result.update({
+                        "status": "ready",
+                        "provider": provider_name,
+                        "model": model,
+                    })
+                    return result
+                except (ValidationError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+                    output_failures += 1
+                    validation_feedback = str(exc)[:300]
+                    logger.warning(
+                        "Error analysis output rejected from %s/%s (attempt %s): %s",
+                        provider_name,
+                        model,
+                        attempt + 1,
+                        exc,
+                    )
+                except (ProviderError, RateLimitError) as exc:
+                    logger.warning(
+                        "Error analysis provider failed for %s/%s: %s",
+                        provider_name,
+                        model,
+                        exc,
+                    )
+                    break
+                except Exception as exc:
+                    logger.exception(
+                        "Unexpected error-analysis provider failure for %s/%s",
+                        provider_name,
+                        model,
+                    )
+                    break
+
+        if output_failures:
+            raise InteractiveAiGenerationError(
+                "invalid_ai_output",
+                "AI 返回的分析格式异常，请稍后重试",
+            )
+        raise InteractiveAiGenerationError(
+            "ai_provider_unavailable",
+            "AI 分析服务暂时不可用，请稍后重试",
+        )
 
     # ========== 微故事 ==========
 
     async def generate_story(self, words: list[str]) -> str:
-        """用错词生成微故事"""
+        """Generate a short story and verify that every target word is used."""
         if not self.flags.story_enabled:
             return ""
-        if not self.text_provider:
-            return ""
-        try:
-            prompt = prompts.GENERATE_STORY.format(words=", ".join(words))
-            messages = [
-                {"role": "system", "content": "You are a creative writer. Return only the story text."},
-                {"role": "user", "content": prompt},
-            ]
-            return await self.text_provider.chat(messages, temperature=0.9, max_tokens=300)
-        except Exception as e:
-            logger.error(f"Story generation failed: {e}")
-            return ""
+        providers = self._text_providers()
+        if not providers:
+            raise InteractiveAiGenerationError(
+                "ai_not_configured",
+                "微故事服务尚未配置，请联系管理员",
+            )
+
+        unique_words = list(dict.fromkeys(word.strip() for word in words if word.strip()))
+        base_prompt = prompts.GENERATE_STORY.format(words=", ".join(unique_words))
+        output_failures = 0
+
+        for provider in providers:
+            provider_name, model = self._provider_identity(provider)
+            validation_feedback = ""
+            for attempt in range(2):
+                prompt = base_prompt
+                if validation_feedback:
+                    prompt += (
+                        "\n\nThe previous draft failed validation: "
+                        f"{validation_feedback}. Return a complete replacement story only."
+                    )
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a concise educational story editor. This is a short writing task; "
+                            "do not include reasoning, a title, Markdown, or explanations."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+                try:
+                    story = await provider.chat(
+                        messages,
+                        **self._interactive_text_options(
+                            provider,
+                            temperature=0.55 if attempt else 0.8,
+                            token_limit=600,
+                        ),
+                    )
+                    story = self._validate_story(story, unique_words)
+                    logger.info("Story generated by %s/%s", provider_name, model)
+                    return story
+                except (ValueError, TypeError, KeyError, RuntimeError) as exc:
+                    output_failures += 1
+                    validation_feedback = str(exc)[:300]
+                    logger.warning(
+                        "Story output rejected from %s/%s (attempt %s): %s",
+                        provider_name,
+                        model,
+                        attempt + 1,
+                        exc,
+                    )
+                except (ProviderError, RateLimitError) as exc:
+                    logger.warning(
+                        "Story provider failed for %s/%s: %s",
+                        provider_name,
+                        model,
+                        exc,
+                    )
+                    break
+                except Exception:
+                    logger.exception(
+                        "Unexpected story provider failure for %s/%s",
+                        provider_name,
+                        model,
+                    )
+                    break
+
+        if output_failures:
+            raise InteractiveAiGenerationError(
+                "invalid_ai_output",
+                "AI 生成的故事不完整，请稍后重试",
+            )
+        raise InteractiveAiGenerationError(
+            "ai_provider_unavailable",
+            "微故事服务暂时不可用，请稍后重试",
+        )
+
+    @staticmethod
+    def _validate_story(story: str, words: list[str]) -> str:
+        if not isinstance(story, str):
+            raise TypeError("story must be text")
+        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", story, flags=re.IGNORECASE).strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.splitlines()
+            cleaned = "\n".join(
+                lines[1:-1] if lines and lines[-1].strip() == "```" else lines[1:]
+            ).strip()
+        token_count = len(re.findall(r"[A-Za-z]+(?:['-][A-Za-z]+)*", cleaned))
+        if token_count < 40 or token_count > 140:
+            raise ValueError(f"story length must be 40-140 English words, got {token_count}")
+        missing = [
+            word
+            for word in words
+            if not re.search(
+                rf"(?<![A-Za-z]){re.escape(word)}(?![A-Za-z])",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+        ]
+        if missing:
+            raise ValueError(f"missing target words: {', '.join(missing)}")
+        return cleaned
 
     # ========== 近义词辨析 ==========
 
