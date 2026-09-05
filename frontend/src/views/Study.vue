@@ -665,9 +665,9 @@ onMounted(() => {
     if (!showRoundResult.value && !showQuitConfirm.value) { e.preventDefault(); showQuitConfirm.value = true; history.pushState(history.state, '', location.href) }
   })
   window.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === ' ') {
-      if (answerSubmitted.value && !showRoundResult.value) { e.preventDefault(); playPronunciation() }
-      else { e.preventDefault() }
+    if (e.key === ' ' && answerSubmitted.value && !showRoundResult.value) {
+      e.preventDefault()
+      playPronunciation()
       return
     }
     if (e.key === 'Enter') {
